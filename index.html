@@ -5,17 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Flappy Roguelike</title>
 <style>
-body {
-    margin: 0;
-    overflow: hidden;
-    background: #111;
-    touch-action: none;
-}
-canvas {
-    display: block;
-    margin: auto;
-    background: linear-gradient(#4aa3a3, #2f5f63);
-}
+body { margin:0; overflow:hidden; background:#111; touch-action:none; }
+canvas { display:block; margin:auto; background:linear-gradient(#4aa3a3,#2f5f63); }
 </style>
 </head>
 <body>
@@ -24,162 +15,120 @@ canvas {
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
-function resizeCanvas() {
-    canvas.width = Math.min(window.innerWidth, 420);
+function resizeCanvas(){
+    canvas.width = Math.min(window.innerWidth,420);
     canvas.height = window.innerHeight;
 }
-window.addEventListener("resize", resizeCanvas);
+window.addEventListener("resize",resizeCanvas);
 resizeCanvas();
 
 // --- GAME STATE ---
-let gravity = 0.5;
-let jumpForce = -8;
-let speed = 2.2;
-let score = 0;
-let gameOver = false;
+let gravity=0.5;
+let jumpForce=-8;
+let speed=2.2;
+let score=0;
+let gameOver=false;
 
-// Dois tipos de escudo
-let shieldTimeVisible = 0;   // azul
-let shieldTimeInvisible = 0; // perks / Easter Egg
+let shieldTimeVisible=0;   // escudo azul
+let shieldTimeInvisible=0; // perk / Easter Egg
 
-let choosingPerk = false;
-let choosingEasterEgg = false;
-let perkChoices = [];
-let easterEggChoices = [];
+let choosingPerk=false;
+let choosingEasterEgg=false;
+let perkChoices=[];
+let easterEggChoices=[];
 
-let birdMode = null; // "explosive", "super", "slime"
-let birdModeTime = 0;
-let birdParalyzed = 0;
+let birdMode=null; //"explosive","super","slime"
+let birdModeTime=0;
+let birdParalyzed=0;
 
-const bird = {
-    x: 80,
-    y: canvas.height / 2,
-    r: 12,
-    vy: 0
-};
-
-const pipes = [];
-const items = [];
+const bird={x:80,y:canvas.height/2,r:12,vy:0};
+const pipes=[];
+const items=[];
 
 // --- INPUT ---
-function flap() {
-    if (!gameOver && !choosingPerk && !choosingEasterEgg && birdParalyzed <= 0) bird.vy = jumpForce;
-}
-
-canvas.addEventListener("mousedown", flap);
-canvas.addEventListener("touchstart", e => {
-    e.preventDefault();
-    flap();
-}, { passive: false });
+function flap(){if(!gameOver&&!choosingPerk&&!choosingEasterEgg&&birdParalyzed<=0) bird.vy=jumpForce;}
+canvas.addEventListener("mousedown",flap);
+canvas.addEventListener("touchstart",e=>{e.preventDefault(); flap();},{passive:false});
 
 // --- PIPE SPAWN ---
-let lastGapY = canvas.height / 2;
-let lastPipeX = 0;
-let lastPipeMoving = false;
+let lastGapY=canvas.height/2;
+let lastPipeX=0;
+let lastPipeMoving=false;
 
-function spawnPipe() {
-    const gap = 150;
-    const diff = 60;
-    let gapY = lastGapY + (Math.random() * diff * 2 - diff);
-    gapY = Math.max(80, Math.min(canvas.height - gap - 80, gapY));
+function canSpawnPipe(){ return canvas.width - lastPipeX >= 220; }
+
+function spawnPipe(){
+    if(!canSpawnPipe()) return;
+
+    const gap=150;
+    const diff=60;
+    let gapY = lastGapY + (Math.random()*diff*2-diff);
+    gapY = Math.max(80,Math.min(canvas.height-gap-80,gapY));
     lastGapY = gapY;
 
-    let moving = Math.random() < 0.25;
-    if (moving && !lastPipeMoving) {
-        const minDist = 300;
-        if (canvas.width - lastPipeX < minDist) moving = false;
+    let moving = Math.random()<0.25;
+    if(moving && !lastPipeMoving){
+        const minDist=300;
+        if(canvas.width - lastPipeX < minDist) moving=false;
     }
 
-    const pipe = {
-        x: canvas.width,
-        width: 60,
+    const pipe={
+        x:canvas.width,
+        width:60,
         gap,
         gapY,
-        baseY: gapY,
-        moveDir: Math.random() < 0.5 ? 1 : -1,
-        moveSpeed: moving ? 0.6 : 0,
-        moveRange: 60,
+        baseY:gapY,
+        moveDir:Math.random()<0.5?1:-1,
+        moveSpeed:moving?0.6:0,
+        moveRange:60,
         moving,
-        passed: false,
-        hasItem: Math.random() < 0.6,
-        itemSpawned: false
+        passed:false,
+        hasItem:Math.random()<0.25, // menos itens
+        itemSpawned:false
     };
     pipes.push(pipe);
-
     lastPipeX = pipe.x;
     lastPipeMoving = moving;
 
-    if (pipe.hasItem) spawnItemInPipe(pipe);
-    if (Math.random() < 0.001) spawnItemInPipe(pipe, "easterEgg");
+    if(pipe.hasItem) spawnItemInPipe(pipe);
+    if(Math.random()<0.001) spawnItemInPipe(pipe,"easterEgg"); // Easter Egg raríssimo
 }
 
 // --- ITEM SPAWN ---
-function spawnItemInPipe(pipe, kind = null) {
-    if (!kind) kind = Math.random() < 0.5 ? "perk" : "shield";
-    items.push({
-        x: pipe.x + pipe.width / 2,
-        y: pipe.gapY + pipe.gap / 2,
-        r: 12,
-        kind,
-        pipe
-    });
+function spawnItemInPipe(pipe,kind=null){
+    if(!kind) kind = Math.random()<0.5?"perk":"shield";
+    items.push({x:pipe.x+pipe.width/2, y:pipe.gapY+pipe.gap/2, r:12, kind, pipe});
 }
 
 // --- PERKS ---
-function openPerkChoice() {
-    choosingPerk = true;
-    perkChoices = [
-        { title: "Pulo Forte", desc: "Você pula mais alto", apply: () => jumpForce -= 1 },
-        { title: "Gravidade Leve", desc: "Cai mais devagar", apply: () => gravity -= 0.05 },
-        { title: "Velocidade +", desc: "Tudo fica mais rápido", apply: () => speed += 0.3 }
-    ].sort(() => 0.5 - Math.random()).slice(0, 2);
-    shieldTimeInvisible = 60; // 1s invisível
+function openPerkChoice(){
+    choosingPerk=true;
+    perkChoices=[
+        {title:"Pulo Forte", desc:"Você pula mais alto", apply:()=>jumpForce-=1},
+        {title:"Gravidade Leve", desc:"Cai mais devagar", apply:()=>gravity-=0.05},
+        {title:"Velocidade +", desc:"Tudo fica mais rápido", apply:()=>speed+=0.3}
+    ].sort(()=>0.5-Math.random()).slice(0,2);
+    shieldTimeInvisible=60; // mini escudo invisível
 }
-
-function handlePerkSelect(y) {
-    perkChoices.forEach((p,i)=>{
-        const boxY = canvas.height/2-100 + i*120;
-        if (y>boxY && y<boxY+80){
-            p.apply();
-            choosingPerk = false;
-        }
-    });
-}
+function handlePerkSelect(y){ perkChoices.forEach((p,i)=>{ const boxY=canvas.height/2-100 + i*120; if(y>boxY && y<boxY+80){ p.apply(); choosingPerk=false; } }); }
 
 // --- EASTER EGG ---
-function openEasterEggChoice() {
-    choosingEasterEgg = true;
-    easterEggChoices = [
-        { title: "Pássaro Explosivo", desc: "Deleta tudo que toca por 40s", apply: () => { birdMode="explosive"; birdModeTime=2400; } },
-        { title: "Super Pássaro", desc: "Invencível por 40s", apply: () => { birdMode="super"; birdModeTime=2400; shieldTimeInvisible=2400; } },
-        { title: "Slime Grudenta", desc: "Paralisa 3s ao tocar algo, dura 60s", apply: () => { birdMode="slime"; birdModeTime=3600; } }
+function openEasterEggChoice(){
+    choosingEasterEgg=true;
+    easterEggChoices=[
+        {title:"Pássaro Explosivo", desc:"Deleta tudo que toca por 40s", apply:()=>{birdMode="explosive"; birdModeTime=2400;}},
+        {title:"Super Pássaro", desc:"Invencível por 40s", apply:()=>{birdMode="super"; birdModeTime=2400; shieldTimeInvisible=2400;}},
+        {title:"Slime Grudenta", desc:"Paralisa 3s ao tocar algo, dura 60s", apply:()=>{birdMode="slime"; birdModeTime=3600;}}
     ];
-    shieldTimeInvisible = 60; // mini escudo invisível
+    shieldTimeInvisible=60; // mini escudo
 }
+function handleEasterEggSelect(y){ easterEggChoices.forEach((p,i)=>{ const boxY=canvas.height/2-100 + i*120; if(y>boxY && y<boxY+80){ p.apply(); choosingEasterEgg=false; } }); }
 
-function handleEasterEggSelect(y){
-    easterEggChoices.forEach((p,i)=>{
-        const boxY = canvas.height/2-100 + i*120;
-        if (y>boxY && y<boxY+80){
-            p.apply();
-            choosingEasterEgg=false;
-        }
-    });
-}
-
-canvas.addEventListener("click", e=>{
-    if(choosingPerk) handlePerkSelect(e.offsetY);
-    if(choosingEasterEgg) handleEasterEggSelect(e.offsetY);
-});
-canvas.addEventListener("touchstart", e=>{
-    const rect = canvas.getBoundingClientRect();
-    const y = e.touches[0].clientY - rect.top;
-    if(choosingPerk) handlePerkSelect(y);
-    if(choosingEasterEgg) handleEasterEggSelect(y);
-}, {passive:false});
+canvas.addEventListener("click", e=>{ if(choosingPerk) handlePerkSelect(e.offsetY); if(choosingEasterEgg) handleEasterEggSelect(e.offsetY); });
+canvas.addEventListener("touchstart", e=>{ const rect=canvas.getBoundingClientRect(); const y=e.touches[0].clientY - rect.top; if(choosingPerk) handlePerkSelect(y); if(choosingEasterEgg) handleEasterEggSelect(y); }, {passive:false});
 
 // --- LOOP ---
-function update() {
+function update(){
     if(gameOver || choosingPerk || choosingEasterEgg) return;
 
     if(birdParalyzed>0) birdParalyzed--;
@@ -187,31 +136,20 @@ function update() {
 
     bird.vy+=gravity;
     if(birdParalyzed<=0) bird.y+=bird.vy;
-
     if(bird.y+bird.r>canvas.height) gameOver=true;
     if(bird.y-bird.r<0) bird.y=bird.r;
 
     pipes.forEach(p=>{
         p.x-=speed;
-
-        if(p.moving){
-            p.gapY+=p.moveSpeed*p.moveDir;
-            if(Math.abs(p.gapY - p.baseY)>p.moveRange) p.moveDir*=-1;
-        }
-
+        if(p.moving){ p.gapY+=p.moveSpeed*p.moveDir; if(Math.abs(p.gapY - p.baseY)>p.moveRange)p.moveDir*=-1; }
         if(!p.passed && p.x + p.width < bird.x){ score++; p.passed=true; }
 
         const hit = bird.x+bird.r>p.x && bird.x-bird.r<p.x+p.width && (bird.y-bird.r<p.gapY || bird.y+bird.r>p.gapY+p.gap);
-
         const invincible = shieldTimeVisible>0 || shieldTimeInvisible>0 || birdMode==="super";
-
         if(hit){
-            if(birdMode==="explosive"){
-                const index = pipes.indexOf(p);
-                if(index>=0) pipes.splice(index,1);
-            } else if(birdMode==="slime"){
-                birdParalyzed=180;
-            } else if(!invincible) gameOver=true;
+            if(birdMode==="explosive"){ const index=pipes.indexOf(p); if(index>=0)pipes.splice(index,1); }
+            else if(birdMode==="slime"){ birdParalyzed=180; }
+            else if(!invincible) gameOver=true;
         }
     });
 
@@ -222,7 +160,7 @@ function update() {
 
         if(it.x<-20) items.splice(i,1);
 
-        const d = Math.hypot(bird.x-it.x,bird.y-it.y);
+        const d=Math.hypot(bird.x-it.x,bird.y-it.y);
         if(d<bird.r+it.r){
             if(it.kind==="shield") shieldTimeVisible=180;
             if(it.kind==="perk") openPerkChoice();
@@ -238,13 +176,8 @@ function update() {
 // --- DRAW ---
 function drawBird(){
     ctx.fillStyle="yellow";
-    ctx.beginPath();
-    ctx.arc(bird.x,bird.y,bird.r,0,Math.PI*2);
-    ctx.fill();
-    ctx.fillStyle="black";
-    ctx.beginPath();
-    ctx.arc(bird.x+4,bird.y-3,2,0,Math.PI*2);
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(bird.x,bird.y,bird.r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="black"; ctx.beginPath(); ctx.arc(bird.x+4,bird.y-3,2,0,Math.PI*2); ctx.fill();
 }
 
 function draw(){
@@ -260,72 +193,39 @@ function draw(){
         if(it.kind==="perk") ctx.fillStyle="purple";
         else if(it.kind==="shield") ctx.fillStyle="cyan";
         else if(it.kind==="easterEgg") ctx.fillStyle="orange";
-        ctx.beginPath();
-        ctx.arc(it.x,it.y,it.r,0,Math.PI*2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
     });
 
     drawBird();
 
     if(shieldTimeVisible>0){
-        ctx.strokeStyle="cyan";
-        ctx.beginPath();
-        ctx.arc(bird.x,bird.y,bird.r+4,0,Math.PI*2);
-        ctx.stroke();
+        ctx.strokeStyle="cyan"; ctx.beginPath(); ctx.arc(bird.x,bird.y,bird.r+4,0,Math.PI*2); ctx.stroke();
     }
 
-    ctx.fillStyle="white";
-    ctx.fillText("Score: "+score,10,20);
+    ctx.fillStyle="white"; ctx.fillText("Score: "+score,10,20);
 
     if(choosingPerk){
-        ctx.fillStyle="rgba(0,0,0,0.6)";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-        perkChoices.forEach((p,i)=>{
-            const y=canvas.height/2-100 + i*120;
-            ctx.fillStyle="#333";
-            ctx.fillRect(40,y,canvas.width-80,80);
-            ctx.fillStyle="white";
-            ctx.fillText(p.title,60,y+30);
-            ctx.fillText(p.desc,60,y+55);
-        });
+        ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+        perkChoices.forEach((p,i)=>{ const y=canvas.height/2-100 + i*120; ctx.fillStyle="#333"; ctx.fillRect(40,y,canvas.width-80,80); ctx.fillStyle="white"; ctx.fillText(p.title,60,y+30); ctx.fillText(p.desc,60,y+55); });
     }
 
     if(choosingEasterEgg){
-        ctx.fillStyle="rgba(0,0,0,0.6)";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-        easterEggChoices.forEach((p,i)=>{
-            const y=canvas.height/2-100 + i*120;
-            ctx.fillStyle="#333";
-            ctx.fillRect(40,y,canvas.width-80,80);
-            ctx.fillStyle="white";
-            ctx.fillText(p.title,60,y+30);
-            ctx.fillText(p.desc,60,y+55);
-        });
+        ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+        easterEggChoices.forEach((p,i)=>{ const y=canvas.height/2-100 + i*120; ctx.fillStyle="#333"; ctx.fillRect(40,y,canvas.width-80,80); ctx.fillStyle="white"; ctx.fillText(p.title,60,y+30); ctx.fillText(p.desc,60,y+55); });
     }
 
     if(gameOver){
-        ctx.fillStyle="rgba(0,0,0,0.6)";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-        ctx.fillStyle="red";
-        ctx.font="30px Arial";
-        ctx.fillText("GAME OVER", canvas.width/2-80, canvas.height/2-20);
-        ctx.fillStyle="white";
-        ctx.fillText("Score: "+score, canvas.width/2-50, canvas.height/2+20);
+        ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle="red"; ctx.font="30px Arial"; ctx.fillText("GAME OVER", canvas.width/2-80, canvas.height/2-20);
+        ctx.fillStyle="white"; ctx.fillText("Score: "+score, canvas.width/2-50, canvas.height/2+20);
         ctx.fillText("Clique ou toque para reiniciar", canvas.width/2-140, canvas.height/2+60);
-
-        // permite reiniciar
-        canvas.addEventListener("mousedown", ()=>location.reload(), {once:true});
-        canvas.addEventListener("touchstart", ()=>location.reload(), {once:true});
+        canvas.addEventListener("mousedown",()=>location.reload(),{once:true});
+        canvas.addEventListener("touchstart",()=>location.reload(),{once:true});
     }
 }
 
 setInterval(spawnPipe,1800);
-
-function loop(){
-    update();
-    draw();
-    requestAnimationFrame(loop);
-}
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
 loop();
 </script>
 </body>
