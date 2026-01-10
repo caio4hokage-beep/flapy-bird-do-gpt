@@ -52,13 +52,12 @@ canvas.addEventListener("touchstart",e=>{e.preventDefault(); flap();},{passive:f
 
 // --- PIPE SPAWN ---
 let lastGapY=canvas.height/2;
-let lastPipeX=0;
+let lastPipeX=-300; // garante spawn do primeiro cano
 let lastPipeMoving=false;
 
-function canSpawnPipe(){ return canvas.width - lastPipeX >= 220; }
-
 function spawnPipe(){
-    if(!canSpawnPipe()) return;
+    // distância mínima de 220px entre canos
+    if(canvas.width - lastPipeX < 220) return;
 
     const gap=150;
     const diff=60;
@@ -83,7 +82,7 @@ function spawnPipe(){
         moveRange:60,
         moving,
         passed:false,
-        hasItem:Math.random()<0.25, // menos itens
+        hasItem:Math.random()<0.25, // menos frequente
         itemSpawned:false
     };
     pipes.push(pipe);
