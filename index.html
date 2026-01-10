@@ -39,7 +39,12 @@ let score = 0;
 let gameOver = false;
 let shieldTime = 0;
 let choosingPerk = false;
+let choosingEasterEgg = false;
 let perkChoices = [];
+let easterEggChoices = [];
+let birdMode = null; // "explosive", "super", "slime"
+let birdModeTime = 0;
+let birdParalyzed = 0;
 
 const bird = {
     x: 80,
@@ -53,7 +58,7 @@ const items = [];
 
 // --- INPUT ---
 function flap() {
-    if (!gameOver && !choosingPerk) bird.vy = jumpForce;
+    if (!gameOver && !choosingPerk && !choosingEasterEgg && birdParalyzed <= 0) bird.vy = jumpForce;
 }
 
 canvas.addEventListener("mousedown", flap);
@@ -63,10 +68,15 @@ canvas.addEventListener("touchstart", e => {
 }, { passive: false });
 
 // --- PIPE SPAWN ---
+let lastGapY = canvas.height / 2; // para reduzir diferença de altura
 function spawnPipe() {
     const gap = 150;
-    const gapY = Math.random() * (canvas.height - gap - 160) + 80;
-    const moving = Math.random() < 0.65;
+    const diff = 60; // diferença máxima do cano anterior
+    let gapY = lastGapY + (Math.random() * diff * 2 - diff);
+    gapY = Math.max(80, Math.min(canvas.height - gap - 80, gapY));
+    lastGapY = gapY;
+
+    const moving = Math.random() < 0.25; // minoria se mexe
     const pipe = {
         x: canvas.width,
         width: 60,
@@ -78,17 +88,21 @@ function spawnPipe() {
         moveRange: 60,
         moving,
         passed: false,
-        hasItem: moving && Math.random() < 0.6,
+        hasItem: Math.random() < 0.6,
         itemSpawned: false
     };
     pipes.push(pipe);
 
-    if (Math.random() < 0.4) spawnItemInPipe(pipe);
+    // spawn item normal
+    if (pipe.hasItem) spawnItemInPipe(pipe);
+
+    // chance Easter Egg 1/1000
+    if (Math.random() < 0.001) spawnItemInPipe(pipe, "easterEgg");
 }
 
 // --- ITEM SPAWN ---
-function spawnItemInPipe(pipe) {
-    const kind = Math.random() < 0.5 ? "perk" : "shield";
+function spawnItemInPipe(pipe, kind = null) {
+    if (!kind) kind = Math.random() < 0.5 ? "perk" : "shield";
     items.push({
         x: pipe.x + pipe.width / 2,
         y: pipe.gapY + pipe.gap / 2,
@@ -106,6 +120,7 @@ function openPerkChoice() {
         { title: "Gravidade Leve", desc: "Cai mais devagar", apply: () => gravity -= 0.05 },
         { title: "Velocidade +", desc: "Tudo fica mais rápido", apply: () => speed += 0.3 }
     ].sort(() => 0.5 - Math.random()).slice(0, 2);
+    shieldTime = 60; // mini escudo invisível de 1 segundo
 }
 
 function handlePerkSelect(y) {
@@ -118,20 +133,45 @@ function handlePerkSelect(y) {
     });
 }
 
+// --- EASTER EGG ---
+function openEasterEggChoice() {
+    choosingEasterEgg = true;
+    easterEggChoices = [
+        { title: "Pássaro Explosivo", desc: "Deleta tudo que toca por 40s", apply: () => { birdMode = "explosive"; birdModeTime = 2400; } },
+        { title: "Super Pássaro", desc: "Invencível por 40s", apply: () => { birdMode = "super"; birdModeTime = 2400; shieldTime = 2400; } },
+        { title: "Slime Grudenta", desc: "Paralisa 3s ao tocar algo, dura 60s", apply: () => { birdMode = "slime"; birdModeTime = 3600; } }
+    ];
+    shieldTime = 60; // mini escudo invisível
+}
+
+function handleEasterEggSelect(y) {
+    easterEggChoices.forEach((p, i) => {
+        const boxY = canvas.height / 2 - 100 + i * 120;
+        if (y > boxY && y < boxY + 80) {
+            p.apply();
+            choosingEasterEgg = false;
+        }
+    });
+}
+
 canvas.addEventListener("click", e => {
     if (choosingPerk) handlePerkSelect(e.offsetY);
+    if (choosingEasterEgg) handleEasterEggSelect(e.offsetY);
 });
 
 canvas.addEventListener("touchstart", e => {
-    if (!choosingPerk) return;
     const rect = canvas.getBoundingClientRect();
     const y = e.touches[0].clientY - rect.top;
-    handlePerkSelect(y);
+    if (choosingPerk) handlePerkSelect(y);
+    if (choosingEasterEgg) handleEasterEggSelect(y);
 }, { passive: false });
 
 // --- LOOP ---
 function update() {
-    if (gameOver || choosingPerk) return;
+    if (gameOver || choosingPerk || choosingEasterEgg) return;
+
+    if (birdParalyzed > 0) birdParalyzed--;
+    if (birdModeTime > 0) birdModeTime--; else birdMode = null;
 
     bird.vy += gravity;
     bird.y += bird.vy;
@@ -152,17 +192,25 @@ function update() {
             p.passed = true;
         }
 
+        // colisão com cano
         const hit = bird.x + bird.r > p.x &&
                     bird.x - bird.r < p.x + p.width &&
                     (bird.y - bird.r < p.gapY || bird.y + bird.r > p.gapY + p.gap);
 
-        if (hit && shieldTime <= 0) gameOver = true;
+        if (hit) {
+            if (birdMode === "explosive") {
+                // deleta cano
+                const index = pipes.indexOf(p);
+                if (index >= 0) pipes.splice(index, 1);
+            } else if (birdMode === "slime") {
+                birdParalyzed = 180; // 3 segundos
+            } else if (shieldTime <= 0) gameOver = true;
+        }
     });
 
     items.forEach((it, i) => {
-        it.x = it.pipe.x + it.pipe.width / 2; // mantém o item linkado
+        it.x = it.pipe.x + it.pipe.width / 2;
         it.y = it.pipe.gapY + it.pipe.gap / 2;
-
         it.x -= speed;
 
         if (it.x < -20) items.splice(i, 1);
@@ -171,6 +219,7 @@ function update() {
         if (d < bird.r + it.r) {
             if (it.kind === "shield") shieldTime = 180;
             if (it.kind === "perk") openPerkChoice();
+            if (it.kind === "easterEgg") openEasterEggChoice();
             items.splice(i, 1);
         }
     });
@@ -201,7 +250,9 @@ function draw() {
     });
 
     items.forEach(it => {
-        ctx.fillStyle = it.kind === "perk" ? "purple" : "cyan";
+        if (it.kind === "perk") ctx.fillStyle = "purple";
+        else if (it.kind === "shield") ctx.fillStyle = "cyan";
+        else if (it.kind === "easterEgg") ctx.fillStyle = "orange";
         ctx.beginPath();
         ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
         ctx.fill();
@@ -209,27 +260,34 @@ function draw() {
 
     drawBird();
 
-    if (shieldTime > 0) {
-        ctx.strokeStyle = "cyan";
-        ctx.beginPath();
-        ctx.arc(bird.x, bird.y, bird.r + 4, 0, Math.PI * 2);
-        ctx.stroke();
-    }
-
     ctx.fillStyle = "white";
     ctx.fillText("Score: " + score, 10, 20);
 
+    // perks menu
     if (choosingPerk) {
         ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        perkChoices.forEach((p,i)=>{
+            const y = canvas.height/2-100 + i*120;
+            ctx.fillStyle="#333";
+            ctx.fillRect(40,y,canvas.width-80,80);
+            ctx.fillStyle="white";
+            ctx.fillText(p.title,60,y+30);
+            ctx.fillText(p.desc,60,y+55);
+        });
+    }
 
-        perkChoices.forEach((p, i) => {
-            const y = canvas.height / 2 - 100 + i * 120;
-            ctx.fillStyle = "#333";
-            ctx.fillRect(40, y, canvas.width - 80, 80);
-            ctx.fillStyle = "white";
-            ctx.fillText(p.title, 60, y + 30);
-            ctx.fillText(p.desc, 60, y + 55);
+    // Easter Egg menu
+    if (choosingEasterEgg) {
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        easterEggChoices.forEach((p,i)=>{
+            const y = canvas.height/2-100 + i*120;
+            ctx.fillStyle="#333";
+            ctx.fillRect(40,y,canvas.width-80,80);
+            ctx.fillStyle="white";
+            ctx.fillText(p.title,60,y+30);
+            ctx.fillText(p.desc,60,y+55);
         });
     }
 
@@ -250,3 +308,4 @@ loop();
 </script>
 </body>
 </html>
+
