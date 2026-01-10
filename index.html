@@ -14,7 +14,7 @@ body {
 canvas {
     display: block;
     margin: auto;
-    background: #2f5f63;
+    background: linear-gradient(#4aa3a3, #2f5f63);
 }
 </style>
 </head>
@@ -32,10 +32,10 @@ function resizeCanvas() {
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
 
-// --- GAME STATE ---
+// -------- GAME STATE --------
 let gravity = 0.5;
 let jumpForce = -8;
-let speed = 2;
+let speed = 2.2;
 let score = 0;
 let gameOver = false;
 let shieldTime = 0;
@@ -52,49 +52,46 @@ const bird = {
 const pipes = [];
 const items = [];
 
-// --- INPUT ---
+// -------- INPUT --------
 function flap() {
     if (!gameOver && !choosingPerk) bird.vy = jumpForce;
 }
-
 canvas.addEventListener("mousedown", flap);
 canvas.addEventListener("touchstart", e => {
     e.preventDefault();
     flap();
 }, { passive: false });
 
-// --- PIPES ---
+// -------- PIPE SPAWN --------
 function spawnPipe() {
     const gap = 150;
-    const gapY = Math.random() * (canvas.height - gap - 160) + 80;
+    const baseY = Math.random() * (canvas.height - gap - 160) + 80;
+    const moving = Math.random() < 0.65; // CHANCE ALTA
     pipes.push({
         x: canvas.width,
         width: 60,
         gap,
-        gapY,
-        passed: false
+        gapY: baseY,
+        baseY,
+        moveDir: Math.random() < 0.5 ? 1 : -1,
+        moveSpeed: moving ? 0.6 : 0,
+        moveRange: 60,
+        moving,
+        passed: false,
+        hasItem: moving && Math.random() < 0.6 // pode ter item
     });
-
-    // chance de item no gap
-    if (Math.random() < 0.4) {
-        spawnItemInGap(Math.random() < 0.5 ? "perk" : "shield");
-    }
 }
 
-// --- ITEM SPAWN (FIX DEFINITIVO) ---
-function spawnItemInGap(kind) {
-    if (pipes.length === 0) return;
-    const pipe = pipes[pipes.length - 1];
-
+// -------- ITEM (LINKADO AO CANO) --------
+function spawnItem(pipe) {
     items.push({
-        x: pipe.x + pipe.width / 2,
-        y: pipe.gapY + pipe.gap / 2,
+        pipe,
         r: 12,
-        kind
+        kind: Math.random() < 0.5 ? "perk" : "shield"
     });
 }
 
-// --- PERKS ---
+// -------- PERKS --------
 function openPerkChoice() {
     choosingPerk = true;
     perkChoices = [
@@ -133,11 +130,10 @@ canvas.addEventListener("click", e => {
 canvas.addEventListener("touchstart", e => {
     if (!choosingPerk) return;
     const rect = canvas.getBoundingClientRect();
-    const y = e.touches[0].clientY - rect.top;
-    handlePerkSelect(y);
+    handlePerkSelect(e.touches[0].clientY - rect.top);
 }, { passive: false });
 
-// --- LOOP ---
+// -------- LOOP --------
 function update() {
     if (gameOver) return;
 
@@ -149,24 +145,39 @@ function update() {
     pipes.forEach(p => {
         p.x -= speed;
 
+        if (p.moving) {
+            p.gapY += p.moveSpeed * p.moveDir;
+            if (Math.abs(p.gapY - p.baseY) > p.moveRange) p.moveDir *= -1;
+        }
+
+        if (p.hasItem && !p.itemSpawned && p.x < canvas.width * 0.7) {
+            spawnItem(p);
+            p.itemSpawned = true;
+        }
+
         if (!p.passed && p.x + p.width < bird.x) {
             score++;
             p.passed = true;
         }
 
-        const hitPipe =
+        const hit =
             bird.x + bird.r > p.x &&
             bird.x - bird.r < p.x + p.width &&
             (bird.y - bird.r < p.gapY ||
              bird.y + bird.r > p.gapY + p.gap);
 
-        if (hitPipe && shieldTime <= 0) gameOver = true;
+        if (hit && shieldTime <= 0) gameOver = true;
     });
 
     items.forEach((it, i) => {
-        it.x -= speed;
-        const dist = Math.hypot(bird.x - it.x, bird.y - it.y);
-        if (dist < bird.r + it.r) {
+        const p = it.pipe;
+        it.x = p.x + p.width / 2;
+        it.y = p.gapY + p.gap / 2;
+
+        if (it.x < -20) items.splice(i, 1);
+
+        const d = Math.hypot(bird.x - it.x, bird.y - it.y);
+        if (d < bird.r + it.r) {
             if (it.kind === "shield") shieldTime = 180;
             if (it.kind === "perk") openPerkChoice();
             items.splice(i, 1);
@@ -176,7 +187,7 @@ function update() {
     if (shieldTime > 0) shieldTime--;
 }
 
-// --- DRAW ---
+// -------- DRAW --------
 function drawBird() {
     ctx.fillStyle = "yellow";
     ctx.beginPath();
@@ -220,7 +231,6 @@ function draw() {
     if (choosingPerk) {
         ctx.fillStyle = "rgba(0,0,0,0.6)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
         perkChoices.forEach((p, i) => {
             const y = canvas.height / 2 - 100 + i * 120;
             ctx.fillStyle = "#333";
