@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Flappy Roguelike</title>
+<style>
+body {
+    margin: 0;
+    background: #111;
+    color: white;
+    font-family: Arial, sans-serif;
+    text-align: center;
+}
+canvas {
+    display: block;
+    margin: auto;
+    background: linear-gradient(#4ec0ca, #87ceeb);
+    border: 3px solid #000;
+}
+</style>
+</head>
+<body>
+
+<h2>🐤 Flappy Roguelike</h2>
+<canvas id="game" width="420" height="600"></canvas>
+<p id="hud"></p>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+let bird, pipes, items, frame, score;
+let gravity, jump, speed;
+let shieldTime = 0;
+
+function resetGame() {
+    bird = {
+        x: 90,
+        y: 300,
+        vy: 0,
+        r: 14,
+        rot: 0,
+        wing: 0
+    };
+    pipes = [];
+    items = [];
+    frame = 0;
+    score = 0;
+
+    gravity = 0.5;
+    jump = -7;
+    speed = 2;
+    shieldTime = 0;
+}
+
+document.addEventListener("keydown", flap);
+canvas.addEventListener("mousedown", flap);
+
+function flap() {
+    bird.vy = jump;
+    bird.wing = 1;
+}
+
+function spawnPipe() {
+    const type = Math.random();
+    const baseGap = Math.max(90, 150 - score * 2);
+
+    let pipe = {
+        x: canvas.width,
+        w: 50,
+        type: "normal",
+        top: Math.random() * 200 + 50,
+        gap: baseGap,
+        offset: 0,
+        passed: false
+    };
+
+    if (type > 0.7) pipe.type = "moving";
+    if (type > 0.9) pipe.type = "double";
+
+    pipes.push(pipe);
+}
+
+function spawnItem() {
+    const kind = Math.random() < 0.6 ? "perk" : "shield";
+    items.push({
+        x: canvas.width,
+        y: Math.random() * 300 + 150,
+        r: 10,
+        kind
+    });
+}
+
+function update() {
+    frame++;
+    bird.vy += gravity;
+    bird.y += bird.vy;
+    bird.rot = Math.max(-0.5, Math.min(0.5, bird.vy * 0.05));
+    bird.wing *= 0.9;
+
+    if (frame % 90 === 0) spawnPipe();
+    if (frame % 240 === 0) spawnItem();
+
+    for (let p of pipes) {
+        p.x -= speed;
+
+        if (p.type === "moving") {
+            p.offset += 0.03;
+        }
+
+        if (!p.passed && p.x + p.w < bird.x) {
+            score++;
+            p.passed = true;
+        }
+
+        if (shieldTime <= 0 && collidePipe(p)) {
+            gameOver();
+        }
+    }
+
+    for (let i of items) {
+        i.x -= speed;
+        if (dist(bird.x, bird.y, i.x, i.y) < bird.r + i.r) {
+            if (i.kind === "shield") shieldTime = 180;
+            if (i.kind === "perk") applyPerk();
+            i.x = -100;
+        }
+    }
+
+    if (shieldTime > 0) shieldTime--;
+
+    pipes = pipes.filter(p => p.x > -100);
+    items = items.filter(i => i.x > -100);
+
+    if (bird.y > canvas.height || bird.y < 0) gameOver();
+}
+
+function applyPerk() {
+    const r = Math.random();
+    if (r < 0.33) jump -= 0.7;
+    else if (r < 0.66) gravity -= 0.05;
+    else speed += 0.3;
+}
+
+function collidePipe(p) {
+    let top = p.top;
+    let gap = p.gap;
+
+    if (p.type === "moving") {
+        top += Math.sin(p.offset) * 40;
+    }
+
+    if (p.type === "double") {
+        return (
+            rectHit(bird.x, bird.y, bird.r, p.x, 0, p.w, top - 60) ||
+            rectHit(bird.x, bird.y, bird.r, p.x, top + gap + 60, p.w, canvas.height)
+        );
+    }
+
+    return (
+        rectHit(bird.x, bird.y, bird.r, p.x, 0, p.w, top) ||
+        rectHit(bird.x, bird.y, bird.r, p.x, top + gap, p.w, canvas.height)
+    );
+}
+
+function rectHit(cx, cy, r, rx, ry, rw, rh) {
+    return cx + r > rx && cx - r < rx + rw && cy + r > ry && cy - r < ry + rh;
+}
+
+function dist(x1, y1, x2, y2) {
+    return Math.hypot(x1 - x2, y1 - y2);
+}
+
+function drawBird() {
+    ctx.save();
+    ctx.translate(bird.x, bird.y);
+    ctx.rotate(bird.rot);
+
+    // escudo
+    if (shieldTime > 0) {
+        ctx.strokeStyle = "rgba(0,200,255,0.7)";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(0, 0, bird.r + 6, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    // corpo
+    ctx.fillStyle = "yellow";
+    ctx.beginPath();
+    ctx.arc(0, 0, bird.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // asa
+    ctx.fillStyle = "#f5d000";
+    ctx.beginPath();
+    ctx.ellipse(-5, 2, 6, 4 + bird.wing * 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // olho
+    ctx.fillStyle = "black";
+    ctx.beginPath();
+    ctx.arc(4, -4, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // bico
+    ctx.fillStyle = "orange";
+    ctx.beginPath();
+    ctx.moveTo(bird.r, 0);
+    ctx.lineTo(bird.r + 6, 2);
+    ctx.lineTo(bird.r + 6, -2);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "green";
+    for (let p of pipes) {
+        let top = p.top;
+        if (p.type === "moving") top += Math.sin(p.offset) * 40;
+
+        ctx.fillRect(p.x, 0, p.w, top);
+        ctx.fillRect(p.x, top + p.gap, p.w, canvas.height);
+    }
+
+    for (let i of items) {
+        ctx.fillStyle = i.kind === "shield" ? "#00c8ff" : "#ff00ff";
+        ctx.beginPath();
+        ctx.arc(i.x, i.y, i.r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    drawBird();
+
+    document.getElementById("hud").innerText =
+        `Score: ${score} | Escudo: ${Math.ceil(shieldTime / 60)}s`;
+}
+
+function gameOver() {
+    alert("Game Over!\nScore: " + score);
+    resetGame();
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+resetGame();
+loop();
+</script>
+
+</body>
+</html>
