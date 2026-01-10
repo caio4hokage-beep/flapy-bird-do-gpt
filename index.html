@@ -7,25 +7,19 @@
 <style>
 body {
     margin: 0;
+    overflow: hidden;
     background: #111;
-    color: white;
-    font-family: Arial, sans-serif;
-    text-align: center;
-    overscroll-behavior: none;
     touch-action: none;
 }
 canvas {
     display: block;
     margin: auto;
-    background: linear-gradient(#4ec0ca, #87ceeb);
+    background: #2f5f63;
 }
 </style>
 </head>
 <body>
-
-<h3>🐤 Flappy Roguelike</h3>
 <canvas id="game"></canvas>
-<p id="hud"></p>
 
 <script>
 const canvas = document.getElementById("game");
@@ -33,237 +27,223 @@ const ctx = canvas.getContext("2d");
 
 function resizeCanvas() {
     canvas.width = Math.min(window.innerWidth, 420);
-    canvas.height = window.innerHeight - 80;
+    canvas.height = window.innerHeight;
 }
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
 
-let bird, pipes, items, frame, score;
-let gravity, jump, speed;
+// --- GAME STATE ---
+let gravity = 0.5;
+let jumpForce = -8;
+let speed = 2;
+let score = 0;
+let gameOver = false;
 let shieldTime = 0;
 let choosingPerk = false;
 let perkChoices = [];
 
-const perkPool = [
-    { name: "Asas Fortes", desc: "Pulo mais forte", apply: () => jump -= 0.8 },
-    { name: "Corpo Leve", desc: "Menos gravidade", apply: () => gravity -= 0.06 },
-    { name: "Adrenalina", desc: "Canos mais rápidos", apply: () => speed += 0.3 }
-];
+const bird = {
+    x: 80,
+    y: canvas.height / 2,
+    r: 12,
+    vy: 0
+};
 
-function resetGame() {
-    bird = { x: 90, y: canvas.height / 2, vy: 0, r: 14, rot: 0 };
-    pipes = [];
-    items = [];
-    frame = 0;
-    score = 0;
-    gravity = 0.5;
-    jump = -7;
-    speed = 2;
-    shieldTime = 0;
-    choosingPerk = false;
-}
+const pipes = [];
+const items = [];
 
-function randomSafeY() {
-    const top = 80;
-    const bottom = 120;
-    return Math.random() * (canvas.height - top - bottom) + top;
-}
-
+// --- INPUT ---
 function flap() {
-    if (!choosingPerk) bird.vy = jump;
+    if (!gameOver && !choosingPerk) bird.vy = jumpForce;
 }
 
-document.addEventListener("keydown", flap);
 canvas.addEventListener("mousedown", flap);
 canvas.addEventListener("touchstart", e => {
     e.preventDefault();
     flap();
 }, { passive: false });
 
+// --- PIPES ---
 function spawnPipe() {
-    const gap = Math.max(90, 150 - score * 2);
+    const gap = 150;
+    const gapY = Math.random() * (canvas.height - gap - 160) + 80;
     pipes.push({
         x: canvas.width,
-        w: 50,
-        top: Math.random() * 200 + 60,
+        width: 60,
         gap,
-        type: Math.random() > 0.8 ? "moving" : "normal",
-        offset: Math.random() * Math.PI,
+        gapY,
         passed: false
     });
-}
 
-function spawnItem() {
-    items.push({
-        x: canvas.width,
-        y: randomSafeY(),
-        r: 12,
-        kind: Math.random() < 0.6 ? "perk" : "shield"
-    });
-}
-
-function startPerkChoice() {
-    choosingPerk = true;
-    perkChoices = [];
-    while (perkChoices.length < 2) {
-        const p = perkPool[Math.floor(Math.random() * perkPool.length)];
-        if (!perkChoices.includes(p)) perkChoices.push(p);
+    // chance de item no gap
+    if (Math.random() < 0.4) {
+        spawnItemInGap(Math.random() < 0.5 ? "perk" : "shield");
     }
 }
 
-function update() {
-    if (choosingPerk) return;
+// --- ITEM SPAWN (FIX DEFINITIVO) ---
+function spawnItemInGap(kind) {
+    if (pipes.length === 0) return;
+    const pipe = pipes[pipes.length - 1];
 
-    frame++;
+    items.push({
+        x: pipe.x + pipe.width / 2,
+        y: pipe.gapY + pipe.gap / 2,
+        r: 12,
+        kind
+    });
+}
+
+// --- PERKS ---
+function openPerkChoice() {
+    choosingPerk = true;
+    perkChoices = [
+        {
+            title: "Pulo Forte",
+            desc: "Você pula mais alto",
+            apply: () => jumpForce -= 1
+        },
+        {
+            title: "Gravidade Leve",
+            desc: "Cai mais devagar",
+            apply: () => gravity -= 0.05
+        },
+        {
+            title: "Velocidade +",
+            desc: "Tudo fica mais rápido",
+            apply: () => speed += 0.3
+        }
+    ].sort(() => 0.5 - Math.random()).slice(0, 2);
+}
+
+function handlePerkSelect(y) {
+    perkChoices.forEach((p, i) => {
+        const boxY = canvas.height / 2 - 100 + i * 120;
+        if (y > boxY && y < boxY + 80) {
+            p.apply();
+            choosingPerk = false;
+        }
+    });
+}
+
+canvas.addEventListener("click", e => {
+    if (choosingPerk) handlePerkSelect(e.offsetY);
+});
+
+canvas.addEventListener("touchstart", e => {
+    if (!choosingPerk) return;
+    const rect = canvas.getBoundingClientRect();
+    const y = e.touches[0].clientY - rect.top;
+    handlePerkSelect(y);
+}, { passive: false });
+
+// --- LOOP ---
+function update() {
+    if (gameOver) return;
+
     bird.vy += gravity;
     bird.y += bird.vy;
-    bird.rot = Math.max(-0.5, Math.min(0.5, bird.vy * 0.05));
 
-    if (frame % 90 === 0) spawnPipe();
-    if (frame % 220 === 0) spawnItem();
+    if (bird.y < 0 || bird.y > canvas.height) gameOver = true;
 
-    for (let p of pipes) {
+    pipes.forEach(p => {
         p.x -= speed;
-        if (p.type === "moving") p.offset += 0.03;
 
-        if (!p.passed && p.x + p.w < bird.x) {
+        if (!p.passed && p.x + p.width < bird.x) {
             score++;
             p.passed = true;
         }
 
-        if (shieldTime <= 0 && collidePipe(p)) gameOver();
-    }
+        const hitPipe =
+            bird.x + bird.r > p.x &&
+            bird.x - bird.r < p.x + p.width &&
+            (bird.y - bird.r < p.gapY ||
+             bird.y + bird.r > p.gapY + p.gap);
 
-    for (let i of items) {
-        i.x -= speed;
-        if (dist(bird.x, bird.y, i.x, i.y) < bird.r + i.r) {
-            if (i.kind === "shield") shieldTime = 180;
-            if (i.kind === "perk") startPerkChoice();
-            i.x = -100;
+        if (hitPipe && shieldTime <= 0) gameOver = true;
+    });
+
+    items.forEach((it, i) => {
+        it.x -= speed;
+        const dist = Math.hypot(bird.x - it.x, bird.y - it.y);
+        if (dist < bird.r + it.r) {
+            if (it.kind === "shield") shieldTime = 180;
+            if (it.kind === "perk") openPerkChoice();
+            items.splice(i, 1);
         }
-    }
+    });
 
     if (shieldTime > 0) shieldTime--;
-    pipes = pipes.filter(p => p.x > -100);
-    items = items.filter(i => i.x > -100);
-
-    if (bird.y < 0 || bird.y > canvas.height) gameOver();
 }
 
-function collidePipe(p) {
-    let top = p.top;
-    if (p.type === "moving") top += Math.sin(p.offset) * 40;
-
-    return (
-        hit(bird, p.x, 0, p.w, top) ||
-        hit(bird, p.x, top + p.gap, p.w, canvas.height)
-    );
-}
-
-function hit(b, x, y, w, h) {
-    return b.x + b.r > x && b.x - b.r < x + w && b.y + b.r > y && b.y - b.r < y + h;
-}
-
-function dist(x1,y1,x2,y2){ return Math.hypot(x1-x2,y1-y2); }
-
+// --- DRAW ---
 function drawBird() {
-    ctx.save();
-    ctx.translate(bird.x, bird.y);
-    ctx.rotate(bird.rot);
-
-    if (shieldTime > 0) {
-        ctx.strokeStyle = "rgba(0,200,255,0.7)";
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.arc(0,0,bird.r+6,0,Math.PI*2);
-        ctx.stroke();
-    }
-
     ctx.fillStyle = "yellow";
     ctx.beginPath();
-    ctx.arc(0,0,bird.r,0,Math.PI*2);
+    ctx.arc(bird.x, bird.y, bird.r, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = "black";
     ctx.beginPath();
-    ctx.arc(4,-4,2,0,Math.PI*2);
+    ctx.arc(bird.x + 4, bird.y - 3, 2, 0, Math.PI * 2);
     ctx.fill();
-
-    ctx.fillStyle = "orange";
-    ctx.beginPath();
-    ctx.moveTo(bird.r,0);
-    ctx.lineTo(bird.r+6,2);
-    ctx.lineTo(bird.r+6,-2);
-    ctx.fill();
-
-    ctx.restore();
 }
-
-function drawPerkMenu() {
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-
-    perkChoices.forEach((p,i)=>{
-        const y = 200 + i*120;
-        ctx.fillStyle = "#6a00cc";
-        ctx.fillRect(40,y,canvas.width-80,80);
-
-        ctx.fillStyle = "white";
-        ctx.font = "18px Arial";
-        ctx.fillText(p.name, 60, y+30);
-        ctx.font = "14px Arial";
-        ctx.fillText(p.desc, 60, y+55);
-    });
-}
-
-canvas.addEventListener("click", e=>{
-    if(!choosingPerk) return;
-    perkChoices.forEach((p,i)=>{
-        const y=200+i*120;
-        if(e.offsetY>y && e.offsetY<y+80){
-            p.apply();
-            choosingPerk=false;
-        }
-    });
-});
 
 function draw() {
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle="green";
-    for(let p of pipes){
-        let top=p.top;
-        if(p.type==="moving") top+=Math.sin(p.offset)*40;
-        ctx.fillRect(p.x,0,p.w,top);
-        ctx.fillRect(p.x,top+p.gap,p.w,canvas.height);
-    }
+    pipes.forEach(p => {
+        ctx.fillStyle = "darkgreen";
+        ctx.fillRect(p.x, 0, p.width, p.gapY);
+        ctx.fillRect(p.x, p.gapY + p.gap, p.width, canvas.height);
+    });
 
-    for(let i of items){
-        ctx.fillStyle = i.kind==="shield"?"#00c8ff":"#a020f0";
+    items.forEach(it => {
+        ctx.fillStyle = it.kind === "perk" ? "purple" : "cyan";
         ctx.beginPath();
-        ctx.arc(i.x,i.y,i.r,0,Math.PI*2);
+        ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
         ctx.fill();
-    }
+    });
 
     drawBird();
-    if(choosingPerk) drawPerkMenu();
 
-    document.getElementById("hud").innerText =
-        `Score: ${score} | Escudo: ${Math.ceil(shieldTime/60)}s`;
+    if (shieldTime > 0) {
+        ctx.strokeStyle = "cyan";
+        ctx.beginPath();
+        ctx.arc(bird.x, bird.y, bird.r + 4, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    ctx.fillStyle = "white";
+    ctx.fillText("Score: " + score, 10, 20);
+
+    if (choosingPerk) {
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        perkChoices.forEach((p, i) => {
+            const y = canvas.height / 2 - 100 + i * 120;
+            ctx.fillStyle = "#333";
+            ctx.fillRect(40, y, canvas.width - 80, 80);
+            ctx.fillStyle = "white";
+            ctx.fillText(p.title, 60, y + 30);
+            ctx.fillText(p.desc, 60, y + 55);
+        });
+    }
+
+    if (gameOver) {
+        alert("Game Over! Score: " + score);
+        location.reload();
+    }
 }
 
-function gameOver(){
-    alert("Game Over! Score: "+score);
-    resetGame();
-}
+setInterval(spawnPipe, 1800);
 
-function loop(){
+function loop() {
     update();
     draw();
     requestAnimationFrame(loop);
 }
-
-resetGame();
 loop();
 </script>
 </body>
