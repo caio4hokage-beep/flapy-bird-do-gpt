@@ -20,7 +20,6 @@ canvas {
 </head>
 <body>
 <canvas id="game"></canvas>
-
 <script>
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -32,7 +31,7 @@ function resizeCanvas() {
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
 
-// -------- GAME STATE --------
+// --- GAME STATE ---
 let gravity = 0.5;
 let jumpForce = -8;
 let speed = 2.2;
@@ -52,64 +51,60 @@ const bird = {
 const pipes = [];
 const items = [];
 
-// -------- INPUT --------
+// --- INPUT ---
 function flap() {
     if (!gameOver && !choosingPerk) bird.vy = jumpForce;
 }
+
 canvas.addEventListener("mousedown", flap);
 canvas.addEventListener("touchstart", e => {
     e.preventDefault();
     flap();
 }, { passive: false });
 
-// -------- PIPE SPAWN --------
+// --- PIPE SPAWN ---
 function spawnPipe() {
     const gap = 150;
-    const baseY = Math.random() * (canvas.height - gap - 160) + 80;
-    const moving = Math.random() < 0.65; // CHANCE ALTA
-    pipes.push({
+    const gapY = Math.random() * (canvas.height - gap - 160) + 80;
+    const moving = Math.random() < 0.65;
+    const pipe = {
         x: canvas.width,
         width: 60,
         gap,
-        gapY: baseY,
-        baseY,
+        gapY,
+        baseY: gapY,
         moveDir: Math.random() < 0.5 ? 1 : -1,
         moveSpeed: moving ? 0.6 : 0,
         moveRange: 60,
         moving,
         passed: false,
-        hasItem: moving && Math.random() < 0.6 // pode ter item
-    });
+        hasItem: moving && Math.random() < 0.6,
+        itemSpawned: false
+    };
+    pipes.push(pipe);
+
+    if (Math.random() < 0.4) spawnItemInPipe(pipe);
 }
 
-// -------- ITEM (LINKADO AO CANO) --------
-function spawnItem(pipe) {
+// --- ITEM SPAWN ---
+function spawnItemInPipe(pipe) {
+    const kind = Math.random() < 0.5 ? "perk" : "shield";
     items.push({
-        pipe,
+        x: pipe.x + pipe.width / 2,
+        y: pipe.gapY + pipe.gap / 2,
         r: 12,
-        kind: Math.random() < 0.5 ? "perk" : "shield"
+        kind,
+        pipe
     });
 }
 
-// -------- PERKS --------
+// --- PERKS ---
 function openPerkChoice() {
     choosingPerk = true;
     perkChoices = [
-        {
-            title: "Pulo Forte",
-            desc: "Você pula mais alto",
-            apply: () => jumpForce -= 1
-        },
-        {
-            title: "Gravidade Leve",
-            desc: "Cai mais devagar",
-            apply: () => gravity -= 0.05
-        },
-        {
-            title: "Velocidade +",
-            desc: "Tudo fica mais rápido",
-            apply: () => speed += 0.3
-        }
+        { title: "Pulo Forte", desc: "Você pula mais alto", apply: () => jumpForce -= 1 },
+        { title: "Gravidade Leve", desc: "Cai mais devagar", apply: () => gravity -= 0.05 },
+        { title: "Velocidade +", desc: "Tudo fica mais rápido", apply: () => speed += 0.3 }
     ].sort(() => 0.5 - Math.random()).slice(0, 2);
 }
 
@@ -130,17 +125,19 @@ canvas.addEventListener("click", e => {
 canvas.addEventListener("touchstart", e => {
     if (!choosingPerk) return;
     const rect = canvas.getBoundingClientRect();
-    handlePerkSelect(e.touches[0].clientY - rect.top);
+    const y = e.touches[0].clientY - rect.top;
+    handlePerkSelect(y);
 }, { passive: false });
 
-// -------- LOOP --------
+// --- LOOP ---
 function update() {
-    if (gameOver) return;
+    if (gameOver || choosingPerk) return;
 
     bird.vy += gravity;
     bird.y += bird.vy;
 
-    if (bird.y < 0 || bird.y > canvas.height) gameOver = true;
+    if (bird.y + bird.r > canvas.height) gameOver = true;
+    if (bird.y - bird.r < 0) bird.y = bird.r;
 
     pipes.forEach(p => {
         p.x -= speed;
@@ -150,29 +147,23 @@ function update() {
             if (Math.abs(p.gapY - p.baseY) > p.moveRange) p.moveDir *= -1;
         }
 
-        if (p.hasItem && !p.itemSpawned && p.x < canvas.width * 0.7) {
-            spawnItem(p);
-            p.itemSpawned = true;
-        }
-
         if (!p.passed && p.x + p.width < bird.x) {
             score++;
             p.passed = true;
         }
 
-        const hit =
-            bird.x + bird.r > p.x &&
-            bird.x - bird.r < p.x + p.width &&
-            (bird.y - bird.r < p.gapY ||
-             bird.y + bird.r > p.gapY + p.gap);
+        const hit = bird.x + bird.r > p.x &&
+                    bird.x - bird.r < p.x + p.width &&
+                    (bird.y - bird.r < p.gapY || bird.y + bird.r > p.gapY + p.gap);
 
         if (hit && shieldTime <= 0) gameOver = true;
     });
 
     items.forEach((it, i) => {
-        const p = it.pipe;
-        it.x = p.x + p.width / 2;
-        it.y = p.gapY + p.gap / 2;
+        it.x = it.pipe.x + it.pipe.width / 2; // mantém o item linkado
+        it.y = it.pipe.gapY + it.pipe.gap / 2;
+
+        it.x -= speed;
 
         if (it.x < -20) items.splice(i, 1);
 
@@ -187,7 +178,7 @@ function update() {
     if (shieldTime > 0) shieldTime--;
 }
 
-// -------- DRAW --------
+// --- DRAW ---
 function drawBird() {
     ctx.fillStyle = "yellow";
     ctx.beginPath();
@@ -231,6 +222,7 @@ function draw() {
     if (choosingPerk) {
         ctx.fillStyle = "rgba(0,0,0,0.6)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+
         perkChoices.forEach((p, i) => {
             const y = canvas.height / 2 - 100 + i * 120;
             ctx.fillStyle = "#333";
