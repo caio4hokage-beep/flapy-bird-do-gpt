@@ -1,332 +1,819 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Flappy Roguelike</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>Flappy Roguelike+ (Melhorado)</title>
 <style>
-body {
-    margin: 0;
-    overflow: hidden;
-    background: #111;
-    touch-action: none;
-}
-canvas {
-    display: block;
-    margin: auto;
-    background: linear-gradient(#4aa3a3, #2f5f63);
-}
+  :root{
+    --bg1:#4aa3a3; --bg2:#2f5f63;
+    --ui: rgba(0,0,0,.35);
+    --txt: #fff;
+    --accent: #ffd34d;
+  }
+  body{
+    margin:0; overflow:hidden; background:#111;
+    touch-action:none; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  }
+  canvas{ display:block; margin:auto; background:linear-gradient(var(--bg1), var(--bg2)); }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+
 <script>
+/** =========================================================
+ *  FLAPPY ROGUELIKE+ (single-file)
+ *  Principais upgrades:
+ *  - deltaTime
+ *  - HP, shield, coins
+ *  - upgrades com raridade
+ *  - escolhas a cada "room"
+ *  - dificuldade progressiva
+ *  - efeitos visuais/partículas
+ * ========================================================= */
+
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
-function resizeCanvas() {
-    canvas.width = Math.min(window.innerWidth, 420);
-    canvas.height = window.innerHeight;
+function resizeCanvas(){
+  canvas.width = Math.min(window.innerWidth, 460);
+  canvas.height = window.innerHeight;
 }
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
 
-// --- GAME STATE ---
-let gravity = 0.5;
-let jumpForce = -8;
-let speed = 2.2;
-let score = 0;
-let gameOver = false;
+/* ===================== AUDIO (opcional) ===================== */
+let audioEnabled = true;
+let actx = null;
+function beep(freq=440, dur=0.05, type="sine", vol=0.05){
+  if(!audioEnabled) return;
+  if(!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  const o = actx.createOscillator();
+  const g = actx.createGain();
+  o.type = type;
+  o.frequency.value = freq;
+  g.gain.value = vol;
+  o.connect(g); g.connect(actx.destination);
+  o.start();
+  o.stop(actx.currentTime + dur);
+}
 
-// Dois tipos de escudo
-let shieldTimeVisible = 0;   // azul
-let shieldTimeInvisible = 0; // perks / Easter Egg
+/* ===================== RNG helpers ===================== */
+const rand = (a,b)=>Math.random()*(b-a)+a;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const pick = arr => arr[(Math.random()*arr.length)|0];
+function chance(p){ return Math.random()<p; }
 
-let choosingPerk = false;
-let choosingEasterEgg = false;
-let perkChoices = [];
-let easterEggChoices = [];
+/* ===================== GAME STATE ===================== */
+const G = {
+  running: true,
+  pausedForChoice: false,
+  gameOver: false,
 
-let birdMode = null; // "explosive", "super", "slime"
-let birdModeTime = 0;
-let birdParalyzed = 0;
+  score: 0,
+  coins: 0,
+  best: 0,
 
+  // escalas / dificuldade
+  baseSpeed: 190, // px/s
+  speed: 190,
+  gravity: 1150,  // px/s^2
+  jumpVel: -380,  // px/s
+
+  pipe: {
+    interval: 1.65, // s
+    timer: 0,
+    width: 72,
+    gap: 168,
+    moveChance: 0.22
+  },
+
+  // rooms (roguelike)
+  roomEvery: 6, // a cada 6 pontos abre escolha
+  nextRoomScore: 6,
+
+  // upgrades (stats)
+  dmg: 1, // para modo explosivo
+};
+
+/* ===================== PLAYER ===================== */
 const bird = {
-    x: 80,
-    y: canvas.height / 2,
-    r: 12,
-    vy: 0
+  x: 92,
+  y: canvas.height/2,
+  r: 14,
+  vy: 0,
+
+  hpMax: 3,
+  hp: 3,
+
+  shield: 0, // segundos
+  iFrames: 0, // invulnerável após hit (segundos)
+
+  mode: null, // "explosive","super","slime"
+  modeTime: 0,
+  paralyzed: 0,
+
+  // upgrades
+  extraJump: 0,
 };
 
 const pipes = [];
 const items = [];
+const particles = [];
 
-// --- INPUT ---
-function flap() {
-    if (!gameOver && !choosingPerk && !choosingEasterEgg && birdParalyzed <= 0) bird.vy = jumpForce;
+/* ===================== VISUALS ===================== */
+function spawnParticle(x,y, n=6, spread=2){
+  for(let i=0;i<n;i++){
+    particles.push({
+      x,y,
+      vx: rand(-120,120)*spread,
+      vy: rand(-140,80)*spread,
+      r: rand(1.5,3.6),
+      life: rand(0.25,0.6)
+    });
+  }
+}
+
+/* ===================== INPUT ===================== */
+function flap(){
+  if(!G.running) return;
+  if(G.gameOver){
+    resetGame();
+    return;
+  }
+  if(G.pausedForChoice) return;
+  if(bird.paralyzed>0) return;
+
+  bird.vy = G.jumpVel - bird.extraJump;
+  spawnParticle(bird.x-10, bird.y+6, 5, 1);
+  beep(720, 0.04, "square", 0.03);
 }
 
 canvas.addEventListener("mousedown", flap);
-canvas.addEventListener("touchstart", e => {
-    e.preventDefault();
-    flap();
-}, { passive: false });
+canvas.addEventListener("touchstart", (e)=>{
+  e.preventDefault();
+  flap();
+},{passive:false});
 
-// --- PIPE SPAWN ---
-let lastGapY = canvas.height / 2;
-let lastPipeX = 0;
-let lastPipeMoving = false;
+/* ===================== RESET ===================== */
+function resetGame(){
+  pipes.length=0; items.length=0; particles.length=0;
+  G.running=true;
+  G.pausedForChoice=false;
+  G.gameOver=false;
+  G.score=0;
+  G.coins=0;
 
-function spawnPipe() {
-    const gap = 150;
-    const diff = 60;
-    let gapY = lastGapY + (Math.random() * diff * 2 - diff);
-    gapY = Math.max(80, Math.min(canvas.height - gap - 80, gapY));
-    lastGapY = gapY;
+  // reset dificuldade
+  G.speed=G.baseSpeed;
+  G.pipe.interval=1.65;
+  G.pipe.gap=168;
+  G.pipe.timer=0;
+  G.nextRoomScore = G.roomEvery;
 
-    let moving = Math.random() < 0.25;
-    if (moving && !lastPipeMoving) {
-        const minDist = 300;
-        if (canvas.width - lastPipeX < minDist) moving = false;
+  // reset player
+  bird.y = canvas.height/2;
+  bird.vy=0;
+  bird.hpMax=3;
+  bird.hp=3;
+  bird.shield=0;
+  bird.iFrames=0;
+  bird.mode=null;
+  bird.modeTime=0;
+  bird.paralyzed=0;
+  bird.extraJump=0;
+
+  beep(320, 0.08, "sine", 0.04);
+}
+
+/* ===================== PIPES ===================== */
+let lastGapY = canvas.height/2;
+function spawnPipe(){
+  const w = G.pipe.width;
+
+  // dificuldade dinâmica
+  const gap = clamp(G.pipe.gap, 120, 200);
+  const diff = clamp(60 + G.score*1.5, 60, 130);
+
+  let gapY = lastGapY + rand(-diff, diff);
+  gapY = clamp(gapY, 90, canvas.height-gap-90);
+  lastGapY = gapY;
+
+  const moving = chance(G.pipe.moveChance);
+
+  const pipe = {
+    x: canvas.width + 10,
+    w,
+    gap,
+    gapY,
+    baseY: gapY,
+    moving,
+    moveDir: chance(0.5)?1:-1,
+    moveSpeed: moving ? rand(28, 60) : 0, // px/s
+    moveRange: moving ? rand(45, 85) : 0,
+    passed: false,
+    alive: true,
+    itemSpawned: false,
+  };
+
+  pipes.push(pipe);
+
+  // spawn item dentro do gap (chance)
+  const itemChance = clamp(0.52 - (G.score*0.01), 0.18, 0.52);
+  if(chance(itemChance)){
+    spawnItemInPipe(pipe);
+  } else if(chance(0.03)){
+    spawnItemInPipe(pipe, "easterEgg");
+  }
+}
+
+function spawnItemInPipe(pipe, kind=null){
+  if(!kind){
+    // mais variedade do que no original
+    const roll = Math.random();
+    if(roll < 0.45) kind="coin";
+    else if(roll < 0.70) kind="shield";
+    else kind="perkToken";
+  }
+
+  items.push({
+    pipe,
+    kind,
+    x: pipe.x + pipe.w/2,
+    y: pipe.gapY + pipe.gap/2,
+    r: (kind==="coin")?10:12,
+    taken:false
+  });
+}
+
+/* ===================== CHOICE SYSTEM (ROGUELIKE) ===================== */
+let choiceCards = [];
+
+const RARITY = [
+  {name:"Comum", w: 0.62},
+  {name:"Raro",  w: 0.28},
+  {name:"Épico", w: 0.10}
+];
+function rollRarity(){
+  const r = Math.random();
+  let acc=0;
+  for(const t of RARITY){
+    acc += t.w;
+    if(r<=acc) return t.name;
+  }
+  return "Comum";
+}
+
+function openChoiceRoom(title="Escolha 1 upgrade"){
+  G.pausedForChoice = true;
+
+  // “pool” de upgrades
+  const pool = [
+    {
+      id:"hp_up",
+      name:"Coração +1",
+      desc:"+1 de vida máxima (cura 1 também)",
+      rarity:"Comum",
+      apply: ()=>{
+        bird.hpMax += 1;
+        bird.hp = Math.min(bird.hpMax, bird.hp+1);
+        beep(520,0.08,"sine",0.05);
+      }
+    },
+    {
+      id:"shield_long",
+      name:"Escudo Prolongado",
+      desc:"Escudo dura +2s quando coletar",
+      rarity:"Comum",
+      apply: ()=>{
+        // buff global: escudo pega +2s toda vez
+        G.shieldBonus = (G.shieldBonus||0) + 2.0;
+        beep(540,0.06,"triangle",0.05);
+      }
+    },
+    {
+      id:"jump_boost",
+      name:"Asas Fortes",
+      desc:"Pulo mais forte (mais controle)",
+      rarity:"Comum",
+      apply: ()=>{
+        bird.extraJump += 26;
+        beep(660,0.06,"square",0.05);
+      }
+    },
+    {
+      id:"slow_world",
+      name:"Tempo Lento",
+      desc:"Reduz velocidade do mundo em 8%",
+      rarity:"Raro",
+      apply: ()=>{
+        G.baseSpeed *= 0.92;
+        G.speed *= 0.92;
+        beep(360,0.10,"sine",0.05);
+      }
+    },
+    {
+      id:"coin_bonus",
+      name:"Ganância",
+      desc:"Moedas valem +1 extra",
+      rarity:"Raro",
+      apply: ()=>{
+        G.coinBonus = (G.coinBonus||0) + 1;
+        beep(820,0.06,"triangle",0.05);
+      }
+    },
+    {
+      id:"super_mode",
+      name:"Super Pássaro",
+      desc:"Invencível por 12s",
+      rarity:"Épico",
+      apply: ()=>{
+        bird.mode="super";
+        bird.modeTime=12;
+        bird.iFrames = Math.max(bird.iFrames, 1.2);
+        beep(980,0.08,"sawtooth",0.05);
+      }
+    },
+    {
+      id:"explosive_mode",
+      name:"Pássaro Explosivo",
+      desc:"Destrói pipes ao colidir por 12s",
+      rarity:"Épico",
+      apply: ()=>{
+        bird.mode="explosive";
+        bird.modeTime=12;
+        beep(960,0.08,"square",0.05);
+      }
+    },
+    {
+      id:"slime_mode",
+      name:"Slime Grudenta",
+      desc:"Ao bater: paralisa 1.2s, dura 16s",
+      rarity:"Raro",
+      apply: ()=>{
+        bird.mode="slime";
+        bird.modeTime=16;
+        beep(300,0.08,"triangle",0.05);
+      }
+    }
+  ];
+
+  // criar 3 cartas (com raridade)
+  choiceCards = [];
+  while(choiceCards.length<3){
+    const rarity = rollRarity();
+    const options = pool.filter(p=>p.rarity===rarity);
+    if(options.length===0) continue;
+    const candidate = pick(options);
+    if(!choiceCards.find(c=>c.id===candidate.id)){
+      choiceCards.push(candidate);
+    }
+  }
+
+  // bônus pequeno ao entrar na sala
+  bird.shield = Math.max(bird.shield, 0.9);
+}
+
+/* clique para escolher carta */
+function handleChoicePick(y){
+  const cardH = 96;
+  const startY = canvas.height/2 - 170;
+  for(let i=0;i<choiceCards.length;i++){
+    const cy = startY + i*(cardH+22);
+    if(y>=cy && y<=cy+cardH){
+      choiceCards[i].apply();
+      G.pausedForChoice = false;
+      choiceCards = [];
+      return;
+    }
+  }
+}
+
+canvas.addEventListener("click",(e)=>{
+  if(G.pausedForChoice) handleChoicePick(e.offsetY);
+});
+canvas.addEventListener("touchstart",(e)=>{
+  if(!G.pausedForChoice) return;
+  const rect = canvas.getBoundingClientRect();
+  const y = e.touches[0].clientY - rect.top;
+  handleChoicePick(y);
+},{passive:false});
+
+/* ===================== COLLISION ===================== */
+function circleRectCollision(cx,cy,cr, rx,ry,rw,rh){
+  const px = clamp(cx, rx, rx+rw);
+  const py = clamp(cy, ry, ry+rh);
+  const dx = cx-px, dy = cy-py;
+  return (dx*dx + dy*dy) <= cr*cr;
+}
+
+function takeHit(){
+  const inv = (bird.shield>0) || (bird.iFrames>0) || bird.mode==="super";
+  if(inv) return;
+
+  bird.hp -= 1;
+  bird.iFrames = 1.0;
+  spawnParticle(bird.x, bird.y, 14, 1.6);
+  beep(140, 0.08, "sawtooth", 0.06);
+
+  if(bird.hp<=0){
+    G.gameOver = true;
+    G.running = false;
+    G.best = Math.max(G.best, G.score);
+    beep(90,0.2,"square",0.05);
+  }
+}
+
+/* ===================== UPDATE LOOP (delta time) ===================== */
+let lastT = performance.now();
+function update(dt){
+  if(!G.running) return;
+  if(G.pausedForChoice) return;
+
+  // timers
+  bird.iFrames = Math.max(0, bird.iFrames - dt);
+  bird.shield = Math.max(0, bird.shield - dt);
+  bird.paralyzed = Math.max(0, bird.paralyzed - dt);
+  if(bird.modeTime>0) bird.modeTime -= dt;
+  else bird.mode = null;
+
+  // dificuldade cresce
+  const diff = clamp(1 + G.score*0.03, 1, 2.6);
+  G.speed = G.baseSpeed * diff;
+  G.pipe.gap = clamp(168 - G.score*1.4, 120, 168);
+  G.pipe.interval = clamp(1.65 - G.score*0.02, 0.95, 1.65);
+  G.pipe.moveChance = clamp(0.22 + G.score*0.005, 0.22, 0.55);
+
+  // physics
+  bird.vy += G.gravity*dt;
+  if(bird.paralyzed<=0){
+    bird.y += bird.vy*dt;
+  }
+
+  // bounds
+  if(bird.y + bird.r > canvas.height){
+    takeHit();
+    bird.y = canvas.height - bird.r;
+    bird.vy = -120;
+  }
+  if(bird.y - bird.r < 0){
+    bird.y = bird.r;
+    bird.vy = 0;
+  }
+
+  // spawn pipes
+  G.pipe.timer += dt;
+  if(G.pipe.timer >= G.pipe.interval){
+    G.pipe.timer = 0;
+    spawnPipe();
+  }
+
+  // move pipes & collisions
+  for(let i=pipes.length-1;i>=0;i--){
+    const p = pipes[i];
+    p.x -= G.speed*dt;
+
+    if(p.moving){
+      p.gapY += p.moveSpeed*p.moveDir*dt;
+      if(Math.abs(p.gapY - p.baseY) > p.moveRange) p.moveDir *= -1;
     }
 
-    const pipe = {
-        x: canvas.width,
-        width: 60,
-        gap,
-        gapY,
-        baseY: gapY,
-        moveDir: Math.random() < 0.5 ? 1 : -1,
-        moveSpeed: moving ? 0.6 : 0,
-        moveRange: 60,
-        moving,
-        passed: false,
-        hasItem: Math.random() < 0.6,
-        itemSpawned: false
-    };
-    pipes.push(pipe);
+    // score
+    if(!p.passed && (p.x + p.w < bird.x)){
+      p.passed=true;
+      G.score++;
+      beep(420,0.03,"sine",0.03);
 
-    lastPipeX = pipe.x;
-    lastPipeMoving = moving;
+      // abrir sala roguelike
+      if(G.score >= G.nextRoomScore){
+        G.nextRoomScore += G.roomEvery;
+        openChoiceRoom();
+      }
+    }
 
-    if (pipe.hasItem) spawnItemInPipe(pipe);
-    if (Math.random() < 0.001) spawnItemInPipe(pipe, "easterEgg");
+    // remove offscreen
+    if(p.x + p.w < -50){
+      pipes.splice(i,1);
+      continue;
+    }
+
+    // collision check: top + bottom rects
+    const hitTop = circleRectCollision(bird.x,bird.y,bird.r, p.x, 0, p.w, p.gapY);
+    const hitBot = circleRectCollision(bird.x,bird.y,bird.r, p.x, p.gapY+p.gap, p.w, canvas.height);
+
+    if(hitTop || hitBot){
+      if(bird.mode==="explosive"){
+        spawnParticle(p.x+p.w/2, p.gapY+p.gap/2, 22, 2);
+        pipes.splice(i,1);
+        G.coins += 1; // recompensa
+        beep(220,0.06,"square",0.06);
+      }else if(bird.mode==="slime"){
+        bird.paralyzed = Math.max(bird.paralyzed, 1.2);
+        spawnParticle(bird.x, bird.y, 10, 1.2);
+      }else{
+        takeHit();
+        // leve bounce
+        bird.vy = -260;
+      }
+    }
+  }
+
+  // items update
+  for(let i=items.length-1;i>=0;i--){
+    const it = items[i];
+    if(!it.pipe || !pipes.includes(it.pipe)){
+      items.splice(i,1);
+      continue;
+    }
+    it.x = it.pipe.x + it.pipe.w/2;
+    it.y = it.pipe.gapY + it.pipe.gap/2;
+
+    // pickup
+    const d = Math.hypot(bird.x-it.x, bird.y-it.y);
+    if(d < bird.r + it.r){
+      if(it.kind==="coin"){
+        const bonus = (G.coinBonus||0);
+        G.coins += 1 + bonus;
+        spawnParticle(it.x, it.y, 10, 1.2);
+        beep(880,0.03,"triangle",0.05);
+      }
+      if(it.kind==="shield"){
+        const b = (G.shieldBonus||0);
+        bird.shield = Math.min(8.0, bird.shield + 2.2 + b);
+        spawnParticle(it.x, it.y, 10, 1.0);
+        beep(600,0.04,"sine",0.05);
+      }
+      if(it.kind==="perkToken"){
+        // abre escolha fora da room também
+        openChoiceRoom("Token de Upgrade!");
+        spawnParticle(it.x, it.y, 14, 1.4);
+        beep(760,0.05,"square",0.05);
+      }
+      if(it.kind==="easterEgg"){
+        // recompensa forte e aleatória
+        const egg = pick(["super","explosive","slime"]);
+        bird.mode = egg;
+        bird.modeTime = (egg==="slime")?18:12;
+        bird.shield = Math.max(bird.shield, 1.2);
+        spawnParticle(it.x, it.y, 18, 1.8);
+        beep(980,0.08,"sawtooth",0.06);
+      }
+      items.splice(i,1);
+    }
+  }
+
+  // particles
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.life -= dt;
+    p.x += p.vx*dt;
+    p.y += p.vy*dt;
+    p.vy += 680*dt;
+    p.vx *= Math.pow(0.18, dt); // drag
+    if(p.life<=0) particles.splice(i,1);
+  }
 }
 
-// --- ITEM SPAWN ---
-function spawnItemInPipe(pipe, kind = null) {
-    if (!kind) kind = Math.random() < 0.5 ? "perk" : "shield";
-    items.push({
-        x: pipe.x + pipe.width / 2,
-        y: pipe.gapY + pipe.gap / 2,
-        r: 12,
-        kind,
-        pipe
-    });
+/* ===================== DRAW ===================== */
+function drawBackground(){
+  // ground gradient overlay
+  ctx.fillStyle="rgba(0,0,0,0.10)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // nuvens simples
+  ctx.globalAlpha = 0.25;
+  for(let i=0;i<7;i++){
+    const x = (i*110 + (G.score*24)%canvas.width);
+    const y = 90 + (i%3)*70;
+    ctx.beginPath();
+    ctx.arc(x,y,28,0,Math.PI*2);
+    ctx.arc(x+28,y+6,22,0,Math.PI*2);
+    ctx.arc(x-26,y+8,20,0,Math.PI*2);
+    ctx.fillStyle="#fff";
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
-// --- PERKS ---
-function openPerkChoice() {
-    choosingPerk = true;
-    perkChoices = [
-        { title: "Pulo Forte", desc: "Você pula mais alto", apply: () => jumpForce -= 1 },
-        { title: "Gravidade Leve", desc: "Cai mais devagar", apply: () => gravity -= 0.05 },
-        { title: "Velocidade +", desc: "Tudo fica mais rápido", apply: () => speed += 0.3 }
-    ].sort(() => 0.5 - Math.random()).slice(0, 2);
-    shieldTimeInvisible = 60; // 1s invisível
+function drawPipes(){
+  for(const p of pipes){
+    // pipe body
+    ctx.fillStyle="#0f5b2a";
+    ctx.fillRect(p.x,0,p.w,p.gapY);
+    ctx.fillRect(p.x,p.gapY+p.gap,p.w,canvas.height);
+
+    // outline
+    ctx.strokeStyle="rgba(0,0,0,.35)";
+    ctx.lineWidth=3;
+    ctx.strokeRect(p.x,0,p.w,p.gapY);
+    ctx.strokeRect(p.x,p.gapY+p.gap,p.w,canvas.height);
+
+    // lip
+    ctx.fillStyle="#0c4720";
+    ctx.fillRect(p.x-3,p.gapY-18,p.w+6,18);
+    ctx.fillRect(p.x-3,p.gapY+p.gap,p.w+6,18);
+  }
 }
 
-function handlePerkSelect(y) {
-    perkChoices.forEach((p,i)=>{
-        const boxY = canvas.height/2-100 + i*120;
-        if (y>boxY && y<boxY+80){
-            p.apply();
-            choosingPerk = false;
-        }
-    });
+function drawItems(){
+  for(const it of items){
+    if(it.kind==="coin"){
+      ctx.fillStyle="#ffdd55";
+      ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="rgba(0,0,0,.25)";
+      ctx.lineWidth=3; ctx.stroke();
+      ctx.fillStyle="rgba(0,0,0,.25)";
+      ctx.fillRect(it.x-2, it.y-6, 4, 12);
+    } else if(it.kind==="shield"){
+      ctx.fillStyle="#4be3ff";
+      ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
+    } else if(it.kind==="perkToken"){
+      ctx.fillStyle="#b552ff";
+      ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
+    } else if(it.kind==="easterEgg"){
+      ctx.fillStyle="#ff8a2b";
+      ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
+    }
+  }
 }
 
-// --- EASTER EGG ---
-function openEasterEggChoice() {
-    choosingEasterEgg = true;
-    easterEggChoices = [
-        { title: "Pássaro Explosivo", desc: "Deleta tudo que toca por 40s", apply: () => { birdMode="explosive"; birdModeTime=2400; } },
-        { title: "Super Pássaro", desc: "Invencível por 40s", apply: () => { birdMode="super"; birdModeTime=2400; shieldTimeInvisible=2400; } },
-        { title: "Slime Grudenta", desc: "Paralisa 3s ao tocar algo, dura 60s", apply: () => { birdMode="slime"; birdModeTime=3600; } }
-    ];
-    shieldTimeInvisible = 60; // mini escudo invisível
+function drawParticles(){
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle="rgba(255,255,255,0.85)";
+  for(const p of particles){
+    ctx.globalAlpha = Math.max(0, p.life*1.6);
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
-function handleEasterEggSelect(y){
-    easterEggChoices.forEach((p,i)=>{
-        const boxY = canvas.height/2-100 + i*120;
-        if (y>boxY && y<boxY+80){
-            p.apply();
-            choosingEasterEgg=false;
-        }
-    });
-}
-
-canvas.addEventListener("click", e=>{
-    if(choosingPerk) handlePerkSelect(e.offsetY);
-    if(choosingEasterEgg) handleEasterEggSelect(e.offsetY);
-});
-canvas.addEventListener("touchstart", e=>{
-    const rect = canvas.getBoundingClientRect();
-    const y = e.touches[0].clientY - rect.top;
-    if(choosingPerk) handlePerkSelect(y);
-    if(choosingEasterEgg) handleEasterEggSelect(y);
-}, {passive:false});
-
-// --- LOOP ---
-function update() {
-    if(gameOver || choosingPerk || choosingEasterEgg) return;
-
-    if(birdParalyzed>0) birdParalyzed--;
-    if(birdModeTime>0) birdModeTime--; else birdMode=null;
-
-    bird.vy+=gravity;
-    if(birdParalyzed<=0) bird.y+=bird.vy;
-
-    if(bird.y+bird.r>canvas.height) gameOver=true;
-    if(bird.y-bird.r<0) bird.y=bird.r;
-
-    pipes.forEach(p=>{
-        p.x-=speed;
-
-        if(p.moving){
-            p.gapY+=p.moveSpeed*p.moveDir;
-            if(Math.abs(p.gapY - p.baseY)>p.moveRange) p.moveDir*=-1;
-        }
-
-        if(!p.passed && p.x + p.width < bird.x){ score++; p.passed=true; }
-
-        const hit = bird.x+bird.r>p.x && bird.x-bird.r<p.x+p.width && (bird.y-bird.r<p.gapY || bird.y+bird.r>p.gapY+p.gap);
-
-        const invincible = shieldTimeVisible>0 || shieldTimeInvisible>0 || birdMode==="super";
-
-        if(hit){
-            if(birdMode==="explosive"){
-                const index = pipes.indexOf(p);
-                if(index>=0) pipes.splice(index,1);
-            } else if(birdMode==="slime"){
-                birdParalyzed=180;
-            } else if(!invincible) gameOver=true;
-        }
-    });
-
-    items.forEach((it,i)=>{
-        it.x=it.pipe.x + it.pipe.width/2;
-        it.y=it.pipe.gapY + it.pipe.gap/2;
-        it.x-=speed;
-
-        if(it.x<-20) items.splice(i,1);
-
-        const d = Math.hypot(bird.x-it.x,bird.y-it.y);
-        if(d<bird.r+it.r){
-            if(it.kind==="shield") shieldTimeVisible=180;
-            if(it.kind==="perk") openPerkChoice();
-            if(it.kind==="easterEgg") openEasterEggChoice();
-            items.splice(i,1);
-        }
-    });
-
-    if(shieldTimeVisible>0) shieldTimeVisible--;
-    if(shieldTimeInvisible>0) shieldTimeInvisible--;
-}
-
-// --- DRAW ---
 function drawBird(){
-    ctx.fillStyle="yellow";
+  // bird body
+  let body = "#ffd34d";
+  if(bird.mode==="super") body = "#86ffcc";
+  if(bird.mode==="explosive") body = "#ff6b6b";
+  if(bird.mode==="slime") body = "#7fff76";
+
+  // iFrames blink
+  if(bird.iFrames>0 && Math.floor(performance.now()/90)%2===0){
+    ctx.globalAlpha=0.35;
+  }
+
+  // body
+  ctx.fillStyle=body;
+  ctx.beginPath(); ctx.arc(bird.x,bird.y,bird.r,0,Math.PI*2); ctx.fill();
+
+  // wing
+  ctx.fillStyle="rgba(255,255,255,.75)";
+  ctx.beginPath();
+  ctx.ellipse(bird.x-6, bird.y+3, 9, 6, Math.sin(performance.now()/140)*0.35, 0, Math.PI*2);
+  ctx.fill();
+
+  // eye
+  ctx.fillStyle="#111";
+  ctx.beginPath(); ctx.arc(bird.x+5,bird.y-3,2.4,0,Math.PI*2); ctx.fill();
+
+  // beak
+  ctx.fillStyle="#ff9a2b";
+  ctx.beginPath();
+  ctx.moveTo(bird.x+10, bird.y+1);
+  ctx.lineTo(bird.x+18, bird.y+4);
+  ctx.lineTo(bird.x+10, bird.y+7);
+  ctx.closePath(); ctx.fill();
+
+  ctx.globalAlpha=1;
+
+  // shield ring
+  if(bird.shield>0){
+    ctx.strokeStyle="rgba(75,227,255,.85)";
+    ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(bird.x,bird.y,bird.r+6,0,Math.PI*2); ctx.stroke();
+  }
+}
+
+function drawHUD(){
+  ctx.font = "16px Arial";
+  ctx.fillStyle="rgba(0,0,0,.35)";
+  ctx.fillRect(10,10, 206, 78);
+
+  ctx.fillStyle="#fff";
+  ctx.fillText("Score: " + G.score, 20, 33);
+  ctx.fillText("Moedas: " + G.coins, 20, 53);
+  ctx.fillText("Best: " + G.best, 20, 73);
+
+  // hp
+  for(let i=0;i<bird.hpMax;i++){
+    const x = canvas.width - 22 - i*22;
+    const y = 24;
+    ctx.fillStyle = (i<bird.hp) ? "#ff4a68" : "rgba(255,255,255,.25)";
     ctx.beginPath();
-    ctx.arc(bird.x,bird.y,bird.r,0,Math.PI*2);
+    ctx.arc(x,y,8,0,Math.PI*2);
     ctx.fill();
-    ctx.fillStyle="black";
-    ctx.beginPath();
-    ctx.arc(bird.x+4,bird.y-3,2,0,Math.PI*2);
-    ctx.fill();
+  }
+
+  // mode
+  if(bird.mode){
+    ctx.fillStyle="rgba(0,0,0,.35)";
+    ctx.fillRect(10, 96, 206, 30);
+    ctx.fillStyle="#fff";
+    ctx.fillText("Modo: " + bird.mode + " ("+bird.modeTime.toFixed(0)+"s)", 20, 118);
+  }
+}
+
+function drawChoiceOverlay(){
+  ctx.fillStyle="rgba(0,0,0,0.72)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  ctx.fillStyle="#fff";
+  ctx.font="22px Arial";
+  ctx.fillText("Escolha um upgrade", 30, canvas.height/2 - 215);
+
+  const startY = canvas.height/2 - 170;
+  const cardH = 96;
+
+  for(let i=0;i<choiceCards.length;i++){
+    const c = choiceCards[i];
+    const y = startY + i*(cardH+22);
+
+    // card
+    ctx.fillStyle="rgba(255,255,255,0.10)";
+    ctx.fillRect(26, y, canvas.width-52, cardH);
+
+    // rarity color hint
+    let col = "#bdbdbd";
+    if(c.rarity==="Raro") col="#5bd3ff";
+    if(c.rarity==="Épico") col="#ff7cff";
+
+    ctx.fillStyle=col;
+    ctx.fillRect(26, y, 10, cardH);
+
+    ctx.fillStyle="#fff";
+    ctx.font="18px Arial";
+    ctx.fillText(c.name + " ["+c.rarity+"]", 46, y+33);
+
+    ctx.font="14px Arial";
+    ctx.fillStyle="rgba(255,255,255,.85)";
+    ctx.fillText(c.desc, 46, y+60);
+  }
+
+  ctx.fillStyle="rgba(255,255,255,.75)";
+  ctx.font="14px Arial";
+  ctx.fillText("Clique/toque em uma carta para continuar", 30, canvas.height - 50);
+}
+
+function drawGameOver(){
+  ctx.fillStyle="rgba(0,0,0,0.70)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  ctx.fillStyle="#ff4a68";
+  ctx.font="34px Arial";
+  ctx.fillText("GAME OVER", canvas.width/2 - 110, canvas.height/2 - 70);
+
+  ctx.fillStyle="#fff";
+  ctx.font="20px Arial";
+  ctx.fillText("Score: " + G.score, canvas.width/2 - 48, canvas.height/2 - 25);
+  ctx.fillText("Best: " + G.best, canvas.width/2 - 44, canvas.height/2 + 5);
+
+  ctx.font="15px Arial";
+  ctx.fillStyle="rgba(255,255,255,.85)";
+  ctx.fillText("Clique/toque para reiniciar", canvas.width/2 - 105, canvas.height/2 + 50);
+
+  ctx.fillStyle="rgba(255,255,255,.55)";
+  ctx.fillText("Dica: moedas = recursos. Token roxo abre upgrades.", canvas.width/2 - 175, canvas.height/2 + 85);
 }
 
 function draw(){
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    pipes.forEach(p=>{
-        ctx.fillStyle="darkgreen";
-        ctx.fillRect(p.x,0,p.width,p.gapY);
-        ctx.fillRect(p.x,p.gapY+p.gap,p.width,canvas.height);
-    });
+  drawBackground();
+  drawPipes();
+  drawItems();
+  drawParticles();
+  drawBird();
+  drawHUD();
 
-    items.forEach(it=>{
-        if(it.kind==="perk") ctx.fillStyle="purple";
-        else if(it.kind==="shield") ctx.fillStyle="cyan";
-        else if(it.kind==="easterEgg") ctx.fillStyle="orange";
-        ctx.beginPath();
-        ctx.arc(it.x,it.y,it.r,0,Math.PI*2);
-        ctx.fill();
-    });
-
-    drawBird();
-
-    if(shieldTimeVisible>0){
-        ctx.strokeStyle="cyan";
-        ctx.beginPath();
-        ctx.arc(bird.x,bird.y,bird.r+4,0,Math.PI*2);
-        ctx.stroke();
-    }
-
-    ctx.fillStyle="white";
-    ctx.fillText("Score: "+score,10,20);
-
-    if(choosingPerk){
-        ctx.fillStyle="rgba(0,0,0,0.6)";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-        perkChoices.forEach((p,i)=>{
-            const y=canvas.height/2-100 + i*120;
-            ctx.fillStyle="#333";
-            ctx.fillRect(40,y,canvas.width-80,80);
-            ctx.fillStyle="white";
-            ctx.fillText(p.title,60,y+30);
-            ctx.fillText(p.desc,60,y+55);
-        });
-    }
-
-    if(choosingEasterEgg){
-        ctx.fillStyle="rgba(0,0,0,0.6)";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-        easterEggChoices.forEach((p,i)=>{
-            const y=canvas.height/2-100 + i*120;
-            ctx.fillStyle="#333";
-            ctx.fillRect(40,y,canvas.width-80,80);
-            ctx.fillStyle="white";
-            ctx.fillText(p.title,60,y+30);
-            ctx.fillText(p.desc,60,y+55);
-        });
-    }
-
-    if(gameOver){
-        ctx.fillStyle="rgba(0,0,0,0.6)";
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-        ctx.fillStyle="red";
-        ctx.font="30px Arial";
-        ctx.fillText("GAME OVER", canvas.width/2-80, canvas.height/2-20);
-        ctx.fillStyle="white";
-        ctx.fillText("Score: "+score, canvas.width/2-50, canvas.height/2+20);
-        ctx.fillText("Clique ou toque para reiniciar", canvas.width/2-140, canvas.height/2+60);
-
-        // permite reiniciar
-        canvas.addEventListener("mousedown", ()=>location.reload(), {once:true});
-        canvas.addEventListener("touchstart", ()=>location.reload(), {once:true});
-    }
+  if(G.pausedForChoice) drawChoiceOverlay();
+  if(G.gameOver) drawGameOver();
 }
 
-setInterval(spawnPipe,1800);
+/* ===================== MAIN LOOP ===================== */
+function loop(t){
+  const dt = Math.min(0.033, (t-lastT)/1000);
+  lastT = t;
 
-function loop(){
-    update();
-    draw();
-    requestAnimationFrame(loop);
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
 }
-loop();
+requestAnimationFrame(loop);
+
+/* primeira interação ativa audio em alguns browsers */
+window.addEventListener("pointerdown", ()=>{
+  if(actx && actx.state==="suspended") actx.resume();
+},{once:false});
 </script>
 </body>
 </html>
