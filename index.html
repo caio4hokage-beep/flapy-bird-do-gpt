@@ -3,45 +3,59 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-<title>Flappy Roguelike+ (Melhorado)</title>
+<title>Flappy Roguelike Futurista</title>
 <style>
   :root{
-    --bg1:#4aa3a3; --bg2:#2f5f63;
-    --ui: rgba(0,0,0,.35);
-    --txt: #fff;
-    --accent: #ffd34d;
+    --neon1:#07f7ff;
+    --neon2:#a55bff;
+    --neon3:#ff2bd6;
+    --bgTop:#050612;
+    --bgMid:#070a22;
+    --bgBot:#07102f;
   }
   body{
-    margin:0; overflow:hidden; background:#111;
-    touch-action:none; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    margin:0;
+    overflow:hidden;
+    background:#000;
+    touch-action:none;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   }
-  canvas{ display:block; margin:auto; background:linear-gradient(var(--bg1), var(--bg2)); }
+  canvas{
+    display:block;
+    margin:auto;
+    background: linear-gradient(var(--bgTop), var(--bgMid), var(--bgBot));
+  }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 
 <script>
-/** =========================================================
- *  FLAPPY ROGUELIKE+ (single-file)
- *  Principais upgrades:
- *  - deltaTime
- *  - HP, shield, coins
- *  - upgrades com raridade
- *  - escolhas a cada "room"
- *  - dificuldade progressiva
- *  - efeitos visuais/partículas
- * ========================================================= */
+/* ============================================================
+   FLAPPY ROGUELIKE FUTURISTA (single file)
+   - mobile friendly
+   - deltaTime
+   - rooms (choices)
+   - orbe laranja 1/100 -> 3 poderes:
+      * Slime 12s: +65% speed, +2 corações
+      * Explosivo 12s
+      * Super (invencível) 16s
+   - fundo futurista com prédios e neon glow
+============================================================ */
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
 function resizeCanvas(){
-  canvas.width = Math.min(window.innerWidth, 460);
+  // FULLSCREEN pra celular
+  canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 }
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
+
+// Evita scroll fantasma
+document.body.addEventListener("touchmove", e => e.preventDefault(), { passive:false });
 
 /* ===================== AUDIO (opcional) ===================== */
 let audioEnabled = true;
@@ -58,14 +72,17 @@ function beep(freq=440, dur=0.05, type="sine", vol=0.05){
   o.start();
   o.stop(actx.currentTime + dur);
 }
+window.addEventListener("pointerdown", ()=>{
+  if(actx && actx.state==="suspended") actx.resume();
+},{once:false});
 
-/* ===================== RNG helpers ===================== */
+/* ===================== Helpers ===================== */
 const rand = (a,b)=>Math.random()*(b-a)+a;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const pick = arr => arr[(Math.random()*arr.length)|0];
-function chance(p){ return Math.random()<p; }
+const chance = p => Math.random() < p;
 
-/* ===================== GAME STATE ===================== */
+/* ===================== Game State ===================== */
 const G = {
   running: true,
   pausedForChoice: false,
@@ -75,31 +92,30 @@ const G = {
   coins: 0,
   best: 0,
 
-  // escalas / dificuldade
-  baseSpeed: 190, // px/s
-  speed: 190,
-  gravity: 1150,  // px/s^2
-  jumpVel: -380,  // px/s
+  baseSpeed: 210, // px/s
+  speed: 210,
+  tempSpeedMult: 1, // buffs
+
+  gravity: 1220,  // px/s^2
+  jumpVel: -400,  // px/s
 
   pipe: {
-    interval: 1.65, // s
+    interval: 1.55,
     timer: 0,
-    width: 72,
-    gap: 168,
+    width: 78,
+    gap: 175,
     moveChance: 0.22
   },
 
-  // rooms (roguelike)
-  roomEvery: 6, // a cada 6 pontos abre escolha
+  roomEvery: 6,
   nextRoomScore: 6,
 
-  // upgrades (stats)
-  dmg: 1, // para modo explosivo
+  shieldBonus: 0,
+  coinBonus: 0
 };
 
-/* ===================== PLAYER ===================== */
 const bird = {
-  x: 92,
+  x: 110,
   y: canvas.height/2,
   r: 14,
   vy: 0,
@@ -107,133 +123,175 @@ const bird = {
   hpMax: 3,
   hp: 3,
 
-  shield: 0, // segundos
-  iFrames: 0, // invulnerável após hit (segundos)
+  shield: 0,
+  iFrames: 0,
 
-  mode: null, // "explosive","super","slime"
+  mode: null,      // "explosive" | "super" | "slime"
   modeTime: 0,
-  paralyzed: 0,
 
-  // upgrades
-  extraJump: 0,
+  extraJump: 0
 };
 
 const pipes = [];
 const items = [];
 const particles = [];
 
-/* ===================== VISUALS ===================== */
-function spawnParticle(x,y, n=6, spread=2){
+/* ===================== Futuristic Background ===================== */
+const bg = {
+  stars: [],
+  buildings: [],
+  t: 0
+};
+
+// estrelas
+for(let i=0;i<90;i++){
+  bg.stars.push({
+    x: Math.random()*canvas.width,
+    y: Math.random()*canvas.height*0.6,
+    s: rand(0.7,2.2),
+    a: rand(0.2,0.9),
+    p: rand(0.7,1.6)
+  });
+}
+
+// prédios
+function rebuildBuildings(){
+  bg.buildings = [];
+  const horizonY = canvas.height*0.72;
+  let x=0;
+  while(x < canvas.width+200){
+    const w = rand(40,120);
+    const h = rand(120, 420);
+    bg.buildings.push({
+      x,
+      y: horizonY,
+      w,
+      h,
+      layer: Math.random()<0.5?1:2,
+      neon: pick(["#07f7ff","#a55bff","#ff2bd6"])
+    });
+    x += w + rand(8,22);
+  }
+}
+rebuildBuildings();
+
+window.addEventListener("resize", rebuildBuildings);
+
+/* ===================== Particles ===================== */
+function spawnParticle(x,y, n=8, spread=1){
   for(let i=0;i<n;i++){
     particles.push({
       x,y,
-      vx: rand(-120,120)*spread,
-      vy: rand(-140,80)*spread,
-      r: rand(1.5,3.6),
-      life: rand(0.25,0.6)
+      vx: rand(-160,160)*spread,
+      vy: rand(-170,90)*spread,
+      r: rand(1.5,3.7),
+      life: rand(0.25,0.70),
+      neon: chance(0.4)
     });
   }
 }
 
-/* ===================== INPUT ===================== */
+/* ===================== Input ===================== */
 function flap(){
-  if(!G.running) return;
   if(G.gameOver){
     resetGame();
     return;
   }
-  if(G.pausedForChoice) return;
-  if(bird.paralyzed>0) return;
+  if(!G.running || G.pausedForChoice) return;
 
   bird.vy = G.jumpVel - bird.extraJump;
-  spawnParticle(bird.x-10, bird.y+6, 5, 1);
-  beep(720, 0.04, "square", 0.03);
+  spawnParticle(bird.x-10, bird.y+8, 8, 1);
+  beep(780, 0.04, "square", 0.03);
 }
 
 canvas.addEventListener("mousedown", flap);
-canvas.addEventListener("touchstart", (e)=>{
+canvas.addEventListener("touchstart", e => {
   e.preventDefault();
   flap();
 },{passive:false});
 
-/* ===================== RESET ===================== */
+/* ===================== Reset ===================== */
 function resetGame(){
   pipes.length=0; items.length=0; particles.length=0;
+
   G.running=true;
   G.pausedForChoice=false;
   G.gameOver=false;
-  G.score=0;
-  G.coins=0;
 
-  // reset dificuldade
-  G.speed=G.baseSpeed;
-  G.pipe.interval=1.65;
-  G.pipe.gap=168;
+  G.score=0; G.coins=0;
+  G.baseSpeed=210;
+  G.speed=210;
+  G.tempSpeedMult=1;
+
+  G.pipe.interval=1.55;
+  G.pipe.gap=175;
   G.pipe.timer=0;
-  G.nextRoomScore = G.roomEvery;
+  G.pipe.moveChance=0.22;
 
-  // reset player
-  bird.y = canvas.height/2;
+  G.nextRoomScore=G.roomEvery;
+
+  G.shieldBonus=0;
+  G.coinBonus=0;
+
+  bird.y=canvas.height/2;
   bird.vy=0;
   bird.hpMax=3;
   bird.hp=3;
+
   bird.shield=0;
   bird.iFrames=0;
   bird.mode=null;
   bird.modeTime=0;
-  bird.paralyzed=0;
   bird.extraJump=0;
 
-  beep(320, 0.08, "sine", 0.04);
+  beep(320,0.08,"sine",0.04);
 }
 
-/* ===================== PIPES ===================== */
+/* ===================== Pipes & Items ===================== */
 let lastGapY = canvas.height/2;
+
 function spawnPipe(){
   const w = G.pipe.width;
 
-  // dificuldade dinâmica
-  const gap = clamp(G.pipe.gap, 120, 200);
-  const diff = clamp(60 + G.score*1.5, 60, 130);
+  const gap = clamp(G.pipe.gap, 125, 210);
+  const diff = clamp(70 + G.score*1.6, 70, 150);
 
   let gapY = lastGapY + rand(-diff, diff);
-  gapY = clamp(gapY, 90, canvas.height-gap-90);
+  gapY = clamp(gapY, 110, canvas.height-gap-140);
   lastGapY = gapY;
 
   const moving = chance(G.pipe.moveChance);
 
   const pipe = {
-    x: canvas.width + 10,
+    x: canvas.width + 20,
     w,
     gap,
     gapY,
     baseY: gapY,
     moving,
     moveDir: chance(0.5)?1:-1,
-    moveSpeed: moving ? rand(28, 60) : 0, // px/s
-    moveRange: moving ? rand(45, 85) : 0,
-    passed: false,
-    alive: true,
-    itemSpawned: false,
+    moveSpeed: moving ? rand(32, 70) : 0,
+    moveRange: moving ? rand(50, 95) : 0,
+    passed: false
   };
 
   pipes.push(pipe);
 
-  // spawn item dentro do gap (chance)
-  const itemChance = clamp(0.52 - (G.score*0.01), 0.18, 0.52);
-  if(chance(itemChance)){
+  // ORBE LARANJA SUPER RARA: 1 em 100 (1%)
+  const itemChance = clamp(0.52 - (G.score*0.012), 0.18, 0.52);
+
+  if(chance(0.01)){
+    spawnItemInPipe(pipe, "superOrb"); // 🟠 única fonte dos 3 poderes
+  } else if(chance(itemChance)){
     spawnItemInPipe(pipe);
-  } else if(chance(0.03)){
-    spawnItemInPipe(pipe, "easterEgg");
   }
 }
 
 function spawnItemInPipe(pipe, kind=null){
   if(!kind){
-    // mais variedade do que no original
-    const roll = Math.random();
-    if(roll < 0.45) kind="coin";
-    else if(roll < 0.70) kind="shield";
+    const r = Math.random();
+    if(r < 0.50) kind="coin";
+    else if(r < 0.75) kind="shield";
     else kind="perkToken";
   }
 
@@ -242,12 +300,11 @@ function spawnItemInPipe(pipe, kind=null){
     kind,
     x: pipe.x + pipe.w/2,
     y: pipe.gapY + pipe.gap/2,
-    r: (kind==="coin")?10:12,
-    taken:false
+    r: (kind==="coin")?10 : (kind==="superOrb")?16 : 12,
   });
 }
 
-/* ===================== CHOICE SYSTEM (ROGUELIKE) ===================== */
+/* ===================== Roguelike Choice System ===================== */
 let choiceCards = [];
 
 const RARITY = [
@@ -265,126 +322,150 @@ function rollRarity(){
   return "Comum";
 }
 
-function openChoiceRoom(title="Escolha 1 upgrade"){
+function openChoiceRoom(){
   G.pausedForChoice = true;
 
-  // “pool” de upgrades
+  // Pool NÃO contém os 3 super poderes
   const pool = [
     {
       id:"hp_up",
       name:"Coração +1",
-      desc:"+1 de vida máxima (cura 1 também)",
+      desc:"+1 vida máxima (cura +1)",
       rarity:"Comum",
       apply: ()=>{
         bird.hpMax += 1;
         bird.hp = Math.min(bird.hpMax, bird.hp+1);
-        beep(520,0.08,"sine",0.05);
+        beep(520,0.07,"sine",0.05);
       }
     },
     {
       id:"shield_long",
       name:"Escudo Prolongado",
-      desc:"Escudo dura +2s quando coletar",
+      desc:"Escudo coletado dura +2s",
       rarity:"Comum",
       apply: ()=>{
-        // buff global: escudo pega +2s toda vez
-        G.shieldBonus = (G.shieldBonus||0) + 2.0;
-        beep(540,0.06,"triangle",0.05);
+        G.shieldBonus += 2.0;
+        beep(560,0.06,"triangle",0.05);
       }
     },
     {
       id:"jump_boost",
-      name:"Asas Fortes",
-      desc:"Pulo mais forte (mais controle)",
+      name:"Asas Reforçadas",
+      desc:"Pulo mais forte (controle)",
       rarity:"Comum",
       apply: ()=>{
-        bird.extraJump += 26;
+        bird.extraJump += 28;
         beep(660,0.06,"square",0.05);
       }
     },
     {
       id:"slow_world",
-      name:"Tempo Lento",
+      name:"Stabilizer",
       desc:"Reduz velocidade do mundo em 8%",
       rarity:"Raro",
       apply: ()=>{
         G.baseSpeed *= 0.92;
-        G.speed *= 0.92;
-        beep(360,0.10,"sine",0.05);
+        beep(360,0.08,"sine",0.05);
       }
     },
     {
       id:"coin_bonus",
-      name:"Ganância",
+      name:"Módulo de Ganância",
       desc:"Moedas valem +1 extra",
       rarity:"Raro",
       apply: ()=>{
-        G.coinBonus = (G.coinBonus||0) + 1;
+        G.coinBonus += 1;
         beep(820,0.06,"triangle",0.05);
       }
     },
     {
-      id:"super_mode",
-      name:"Super Pássaro",
-      desc:"Invencível por 12s",
-      rarity:"Épico",
-      apply: ()=>{
-        bird.mode="super";
-        bird.modeTime=12;
-        bird.iFrames = Math.max(bird.iFrames, 1.2);
-        beep(980,0.08,"sawtooth",0.05);
-      }
-    },
-    {
-      id:"explosive_mode",
-      name:"Pássaro Explosivo",
-      desc:"Destrói pipes ao colidir por 12s",
-      rarity:"Épico",
-      apply: ()=>{
-        bird.mode="explosive";
-        bird.modeTime=12;
-        beep(960,0.08,"square",0.05);
-      }
-    },
-    {
-      id:"slime_mode",
-      name:"Slime Grudenta",
-      desc:"Ao bater: paralisa 1.2s, dura 16s",
+      id:"shield_start",
+      name:"Bubble Shield",
+      desc:"Ganha +2s de escudo agora",
       rarity:"Raro",
       apply: ()=>{
-        bird.mode="slime";
-        bird.modeTime=16;
-        beep(300,0.08,"triangle",0.05);
+        bird.shield = Math.min(8, bird.shield + 2.0);
+        beep(640,0.05,"sine",0.05);
       }
     }
   ];
 
-  // criar 3 cartas (com raridade)
   choiceCards = [];
-  while(choiceCards.length<3){
+  while(choiceCards.length < 3){
     const rarity = rollRarity();
     const options = pool.filter(p=>p.rarity===rarity);
     if(options.length===0) continue;
+
     const candidate = pick(options);
-    if(!choiceCards.find(c=>c.id===candidate.id)){
-      choiceCards.push(candidate);
-    }
+    if(!choiceCards.find(c=>c.id===candidate.id)) choiceCards.push(candidate);
   }
 
-  // bônus pequeno ao entrar na sala
+  // proteção rápida ao abrir a sala
   bird.shield = Math.max(bird.shield, 0.9);
 }
 
-/* clique para escolher carta */
+function openSuperOrbChoice(){
+  G.pausedForChoice = true;
+
+  // 🟠 LENDÁRIO: só pela orbe laranja super rara
+  choiceCards = [
+    {
+      id:"orb_explosive",
+      name:"PATO EXPLOSIVO (12s)",
+      desc:"Ao colidir, destrói pipes por 12s",
+      rarity:"LENDÁRIO",
+      apply: ()=>{
+        bird.mode="explosive";
+        bird.modeTime=12;
+        beep(960,0.08,"square",0.06);
+      }
+    },
+    {
+      id:"orb_slime",
+      name:"SLIME (12s)",
+      desc:"+65% velocidade por 12s, +2 corações",
+      rarity:"LENDÁRIO",
+      apply: ()=>{
+        bird.mode="slime";
+        bird.modeTime=12;
+
+        // +2 corações (max e cura)
+        bird.hpMax += 2;
+        bird.hp = Math.min(bird.hpMax, bird.hp + 2);
+
+        // +65% velocidade temporário
+        G.tempSpeedMult = 1.65;
+
+        beep(300,0.08,"triangle",0.06);
+      }
+    },
+    {
+      id:"orb_super",
+      name:"INVENCIBILIDADE (16s)",
+      desc:"Você não toma dano por 16s",
+      rarity:"LENDÁRIO",
+      apply: ()=>{
+        bird.mode="super";
+        bird.modeTime=16;
+        bird.iFrames = Math.max(bird.iFrames, 1.5);
+        beep(980,0.08,"sawtooth",0.06);
+      }
+    }
+  ];
+
+  bird.shield = Math.max(bird.shield, 1.0);
+}
+
 function handleChoicePick(y){
-  const cardH = 96;
-  const startY = canvas.height/2 - 170;
+  const cardH = 102;
+  const startY = canvas.height/2 - 185;
+
   for(let i=0;i<choiceCards.length;i++){
     const cy = startY + i*(cardH+22);
     if(y>=cy && y<=cy+cardH){
       choiceCards[i].apply();
-      G.pausedForChoice = false;
       choiceCards = [];
+      G.pausedForChoice = false;
       return;
     }
   }
@@ -400,7 +481,7 @@ canvas.addEventListener("touchstart",(e)=>{
   handleChoicePick(y);
 },{passive:false});
 
-/* ===================== COLLISION ===================== */
+/* ===================== Collision helpers ===================== */
 function circleRectCollision(cx,cy,cr, rx,ry,rw,rh){
   const px = clamp(cx, rx, rx+rw);
   const py = clamp(cy, ry, ry+rh);
@@ -409,53 +490,61 @@ function circleRectCollision(cx,cy,cr, rx,ry,rw,rh){
 }
 
 function takeHit(){
-  const inv = (bird.shield>0) || (bird.iFrames>0) || bird.mode==="super";
+  const inv = (bird.shield>0) || (bird.iFrames>0) || (bird.mode==="super");
   if(inv) return;
 
   bird.hp -= 1;
-  bird.iFrames = 1.0;
-  spawnParticle(bird.x, bird.y, 14, 1.6);
-  beep(140, 0.08, "sawtooth", 0.06);
+  bird.iFrames = 1.05;
+
+  spawnParticle(bird.x, bird.y, 18, 1.7);
+  beep(140, 0.09, "sawtooth", 0.06);
 
   if(bird.hp<=0){
     G.gameOver = true;
     G.running = false;
     G.best = Math.max(G.best, G.score);
-    beep(90,0.2,"square",0.05);
+    beep(90, 0.25, "square", 0.06);
   }
 }
 
-/* ===================== UPDATE LOOP (delta time) ===================== */
+/* ===================== Update (delta time) ===================== */
 let lastT = performance.now();
+
 function update(dt){
   if(!G.running) return;
   if(G.pausedForChoice) return;
 
-  // timers
-  bird.iFrames = Math.max(0, bird.iFrames - dt);
-  bird.shield = Math.max(0, bird.shield - dt);
-  bird.paralyzed = Math.max(0, bird.paralyzed - dt);
-  if(bird.modeTime>0) bird.modeTime -= dt;
-  else bird.mode = null;
+  bg.t += dt;
 
-  // dificuldade cresce
-  const diff = clamp(1 + G.score*0.03, 1, 2.6);
-  G.speed = G.baseSpeed * diff;
-  G.pipe.gap = clamp(168 - G.score*1.4, 120, 168);
-  G.pipe.interval = clamp(1.65 - G.score*0.02, 0.95, 1.65);
-  G.pipe.moveChance = clamp(0.22 + G.score*0.005, 0.22, 0.55);
+  bird.iFrames = Math.max(0, bird.iFrames - dt);
+  bird.shield  = Math.max(0, bird.shield - dt);
+
+  if(bird.modeTime > 0){
+    bird.modeTime -= dt;
+  } else {
+    // quando acabar slime, reseta velocidade temporária
+    if(bird.mode === "slime"){
+      G.tempSpeedMult = 1;
+    }
+    bird.mode = null;
+  }
+
+  // DIFICULDADE
+  const diff = clamp(1 + G.score*0.03, 1, 2.8);
+  G.speed = G.baseSpeed * diff * (G.tempSpeedMult || 1);
+  G.pipe.gap = clamp(175 - G.score*1.2, 132, 175);
+  G.pipe.interval = clamp(1.55 - G.score*0.018, 1.00, 1.55);
+  G.pipe.moveChance = clamp(0.22 + G.score*0.006, 0.22, 0.55);
 
   // physics
   bird.vy += G.gravity*dt;
-  if(bird.paralyzed<=0){
-    bird.y += bird.vy*dt;
-  }
+  bird.y += bird.vy*dt;
 
   // bounds
   if(bird.y + bird.r > canvas.height){
     takeHit();
     bird.y = canvas.height - bird.r;
-    bird.vy = -120;
+    bird.vy = -140;
   }
   if(bird.y - bird.r < 0){
     bird.y = bird.r;
@@ -469,7 +558,7 @@ function update(dt){
     spawnPipe();
   }
 
-  // move pipes & collisions
+  // pipes update
   for(let i=pipes.length-1;i>=0;i--){
     const p = pipes[i];
     p.x -= G.speed*dt;
@@ -485,7 +574,7 @@ function update(dt){
       G.score++;
       beep(420,0.03,"sine",0.03);
 
-      // abrir sala roguelike
+      // abrir sala a cada N pontos
       if(G.score >= G.nextRoomScore){
         G.nextRoomScore += G.roomEvery;
         openChoiceRoom();
@@ -493,28 +582,25 @@ function update(dt){
     }
 
     // remove offscreen
-    if(p.x + p.w < -50){
+    if(p.x + p.w < -100){
       pipes.splice(i,1);
       continue;
     }
 
-    // collision check: top + bottom rects
+    // collision
     const hitTop = circleRectCollision(bird.x,bird.y,bird.r, p.x, 0, p.w, p.gapY);
     const hitBot = circleRectCollision(bird.x,bird.y,bird.r, p.x, p.gapY+p.gap, p.w, canvas.height);
 
     if(hitTop || hitBot){
       if(bird.mode==="explosive"){
-        spawnParticle(p.x+p.w/2, p.gapY+p.gap/2, 22, 2);
+        spawnParticle(p.x+p.w/2, p.gapY+p.gap/2, 28, 2.2);
         pipes.splice(i,1);
-        G.coins += 1; // recompensa
+        G.coins += 1;
         beep(220,0.06,"square",0.06);
-      }else if(bird.mode==="slime"){
-        bird.paralyzed = Math.max(bird.paralyzed, 1.2);
-        spawnParticle(bird.x, bird.y, 10, 1.2);
-      }else{
+      } else {
+        // slime agora NÃO paralisa, apenas joga normal (risco maior)
         takeHit();
-        // leve bounce
-        bird.vy = -260;
+        bird.vy = -280;
       }
     }
   }
@@ -526,39 +612,39 @@ function update(dt){
       items.splice(i,1);
       continue;
     }
+
     it.x = it.pipe.x + it.pipe.w/2;
     it.y = it.pipe.gapY + it.pipe.gap/2;
 
-    // pickup
+    if(it.x < -200){
+      items.splice(i,1);
+      continue;
+    }
+
     const d = Math.hypot(bird.x-it.x, bird.y-it.y);
     if(d < bird.r + it.r){
       if(it.kind==="coin"){
-        const bonus = (G.coinBonus||0);
-        G.coins += 1 + bonus;
-        spawnParticle(it.x, it.y, 10, 1.2);
+        G.coins += 1 + (G.coinBonus||0);
+        spawnParticle(it.x, it.y, 12, 1.3);
         beep(880,0.03,"triangle",0.05);
       }
       if(it.kind==="shield"){
-        const b = (G.shieldBonus||0);
-        bird.shield = Math.min(8.0, bird.shield + 2.2 + b);
-        spawnParticle(it.x, it.y, 10, 1.0);
+        bird.shield = Math.min(8, bird.shield + 2.2 + (G.shieldBonus||0));
+        spawnParticle(it.x, it.y, 10, 1.1);
         beep(600,0.04,"sine",0.05);
       }
       if(it.kind==="perkToken"){
-        // abre escolha fora da room também
-        openChoiceRoom("Token de Upgrade!");
-        spawnParticle(it.x, it.y, 14, 1.4);
+        openChoiceRoom();
+        spawnParticle(it.x, it.y, 18, 1.8);
         beep(760,0.05,"square",0.05);
       }
-      if(it.kind==="easterEgg"){
-        // recompensa forte e aleatória
-        const egg = pick(["super","explosive","slime"]);
-        bird.mode = egg;
-        bird.modeTime = (egg==="slime")?18:12;
-        bird.shield = Math.max(bird.shield, 1.2);
-        spawnParticle(it.x, it.y, 18, 1.8);
-        beep(980,0.08,"sawtooth",0.06);
+      if(it.kind==="superOrb"){
+        // 🟠 única forma de obter poderes
+        openSuperOrbChoice();
+        spawnParticle(it.x, it.y, 26, 2.4);
+        beep(980,0.12,"sawtooth",0.07);
       }
+
       items.splice(i,1);
     }
   }
@@ -569,225 +655,364 @@ function update(dt){
     p.life -= dt;
     p.x += p.vx*dt;
     p.y += p.vy*dt;
-    p.vy += 680*dt;
-    p.vx *= Math.pow(0.18, dt); // drag
+    p.vy += 690*dt;
+    p.vx *= Math.pow(0.16, dt);
     if(p.life<=0) particles.splice(i,1);
+  }
+
+  // stars drift
+  for(const s of bg.stars){
+    s.x -= (18*s.p + G.speed*0.02)*dt;
+    if(s.x < -10) s.x = canvas.width + rand(10, 90);
+  }
+
+  // buildings drift
+  const horizonY = canvas.height*0.72;
+  for(const b of bg.buildings){
+    b.y = horizonY;
+    b.x -= (G.speed*(b.layer===1?0.08:0.14))*dt;
+  }
+  // replenish buildings
+  if(bg.buildings.length>0){
+    const last = bg.buildings[bg.buildings.length-1];
+    while(last.x + last.w < canvas.width + 200){
+      // no-op
+      break;
+    }
+  }
+  // if buildings moved too far left rebuild
+  if(bg.buildings.length>0 && bg.buildings[0].x + bg.buildings[0].w < -220){
+    rebuildBuildings();
   }
 }
 
-/* ===================== DRAW ===================== */
-function drawBackground(){
-  // ground gradient overlay
-  ctx.fillStyle="rgba(0,0,0,0.10)";
-  ctx.fillRect(0,0,canvas.width,canvas.height);
+/* ===================== Draw Futuristic ===================== */
+function neonGlow(color, blur=18){
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur;
+}
 
-  // nuvens simples
-  ctx.globalAlpha = 0.25;
-  for(let i=0;i<7;i++){
-    const x = (i*110 + (G.score*24)%canvas.width);
-    const y = 90 + (i%3)*70;
-    ctx.beginPath();
-    ctx.arc(x,y,28,0,Math.PI*2);
-    ctx.arc(x+28,y+6,22,0,Math.PI*2);
-    ctx.arc(x-26,y+8,20,0,Math.PI*2);
+function drawBackground(){
+  // stars
+  ctx.save();
+  for(const s of bg.stars){
+    ctx.globalAlpha = s.a * (0.5 + 0.5*Math.sin(bg.t*s.p));
     ctx.fillStyle="#fff";
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.s, 0, Math.PI*2);
     ctx.fill();
   }
-  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // glow horizon
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  const horizonY = canvas.height*0.72;
+  const grd = ctx.createLinearGradient(0,horizonY-120,0,horizonY+120);
+  grd.addColorStop(0,"rgba(7,247,255,0)");
+  grd.addColorStop(0.5,"rgba(165,91,255,0.25)");
+  grd.addColorStop(1,"rgba(255,43,214,0)");
+  ctx.fillStyle=grd;
+  ctx.fillRect(0,horizonY-120,canvas.width,240);
+  ctx.restore();
+
+  // buildings
+  ctx.save();
+  for(const b of bg.buildings){
+    const topY = b.y - b.h;
+    // silhouette
+    ctx.globalAlpha = b.layer===1?0.42:0.60;
+    ctx.fillStyle = "#070816";
+    ctx.fillRect(b.x, topY, b.w, b.h);
+
+    // neon edge
+    ctx.globalAlpha = b.layer===1?0.15:0.22;
+    neonGlow(b.neon, b.layer===1?10:16);
+    ctx.strokeStyle=b.neon;
+    ctx.lineWidth=2;
+    ctx.strokeRect(b.x+1, topY+1, b.w-2, b.h-2);
+    ctx.shadowBlur=0;
+
+    // windows
+    ctx.globalAlpha = b.layer===1?0.10:0.15;
+    ctx.fillStyle = "#07f7ff";
+    const stepX = 14, stepY = 16;
+    for(let wx=b.x+8; wx<b.x+b.w-8; wx+=stepX){
+      for(let wy=topY+10; wy<b.y-10; wy+=stepY){
+        if(Math.random()<0.12){
+          ctx.fillRect(wx,wy,5,8);
+        }
+      }
+    }
+  }
+  ctx.restore();
 }
 
 function drawPipes(){
   for(const p of pipes){
-    // pipe body
-    ctx.fillStyle="#0f5b2a";
+    // futurista: torres neon
+    ctx.save();
+    neonGlow("#07f7ff", 16);
+
+    // top
+    ctx.fillStyle="rgba(6, 255, 255, 0.12)";
     ctx.fillRect(p.x,0,p.w,p.gapY);
+
+    // bottom
     ctx.fillRect(p.x,p.gapY+p.gap,p.w,canvas.height);
 
-    // outline
-    ctx.strokeStyle="rgba(0,0,0,.35)";
+    // borders
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle="rgba(7,247,255,.65)";
     ctx.lineWidth=3;
     ctx.strokeRect(p.x,0,p.w,p.gapY);
     ctx.strokeRect(p.x,p.gapY+p.gap,p.w,canvas.height);
 
-    // lip
-    ctx.fillStyle="#0c4720";
-    ctx.fillRect(p.x-3,p.gapY-18,p.w+6,18);
-    ctx.fillRect(p.x-3,p.gapY+p.gap,p.w+6,18);
+    // neon core line
+    neonGlow("#a55bff", 12);
+    ctx.strokeStyle="rgba(165,91,255,.85)";
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(p.x+p.w*0.5, 0);
+    ctx.lineTo(p.x+p.w*0.5, p.gapY);
+    ctx.moveTo(p.x+p.w*0.5, p.gapY+p.gap);
+    ctx.lineTo(p.x+p.w*0.5, canvas.height);
+    ctx.stroke();
+
+    ctx.restore();
   }
 }
 
 function drawItems(){
   for(const it of items){
     if(it.kind==="coin"){
-      ctx.fillStyle="#ffdd55";
+      ctx.save();
+      neonGlow("#ffd34d", 16);
+      ctx.fillStyle="rgba(255,211,77,0.95)";
       ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle="rgba(0,0,0,.25)";
-      ctx.lineWidth=3; ctx.stroke();
-      ctx.fillStyle="rgba(0,0,0,.25)";
-      ctx.fillRect(it.x-2, it.y-6, 4, 12);
-    } else if(it.kind==="shield"){
-      ctx.fillStyle="#4be3ff";
+      ctx.shadowBlur=0;
+      ctx.strokeStyle="rgba(255,255,255,.35)";
+      ctx.lineWidth=2;
+      ctx.stroke();
+      ctx.restore();
+    } 
+    else if(it.kind==="shield"){
+      ctx.save();
+      neonGlow("#07f7ff", 20);
+      ctx.fillStyle="rgba(75,227,255,0.95)";
       ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
-    } else if(it.kind==="perkToken"){
-      ctx.fillStyle="#b552ff";
+      ctx.restore();
+    } 
+    else if(it.kind==="perkToken"){
+      ctx.save();
+      neonGlow("#a55bff", 20);
+      ctx.fillStyle="rgba(181,82,255,0.95)";
       ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
-    } else if(it.kind==="easterEgg"){
-      ctx.fillStyle="#ff8a2b";
+      ctx.restore();
+    } 
+    else if(it.kind==="superOrb"){
+      // 🟠 super rara, aura extra
+      ctx.save();
+      neonGlow("#ff8a2b", 30);
+      ctx.fillStyle="rgba(255,138,43,0.95)";
       ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
+
+      // aura pulsante
+      ctx.globalAlpha=0.35 + 0.25*Math.sin(bg.t*8);
+      ctx.strokeStyle="rgba(255,255,255,.7)";
+      ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(it.x,it.y,it.r+7,0,Math.PI*2); ctx.stroke();
+
+      // highlight
+      ctx.globalAlpha=0.45;
+      ctx.fillStyle="#fff";
+      ctx.beginPath(); ctx.arc(it.x-5,it.y-6,it.r*0.38,0,Math.PI*2); ctx.fill();
+
+      ctx.restore();
     }
   }
 }
 
 function drawParticles(){
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle="rgba(255,255,255,0.85)";
   for(const p of particles){
+    ctx.save();
     ctx.globalAlpha = Math.max(0, p.life*1.6);
+    if(p.neon){
+      neonGlow("#ff2bd6", 18);
+      ctx.fillStyle="rgba(255,43,214,0.85)";
+    }else{
+      ctx.shadowBlur=0;
+      ctx.fillStyle="rgba(255,255,255,0.8)";
+    }
     ctx.beginPath();
     ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
     ctx.fill();
+    ctx.restore();
   }
-  ctx.globalAlpha = 1;
 }
 
 function drawBird(){
-  // bird body
   let body = "#ffd34d";
   if(bird.mode==="super") body = "#86ffcc";
   if(bird.mode==="explosive") body = "#ff6b6b";
   if(bird.mode==="slime") body = "#7fff76";
 
-  // iFrames blink
-  if(bird.iFrames>0 && Math.floor(performance.now()/90)%2===0){
+  // blink iFrames
+  if(bird.iFrames>0 && Math.floor(performance.now()/80)%2===0){
     ctx.globalAlpha=0.35;
   }
 
-  // body
+  ctx.save();
+  neonGlow("#07f7ff", 14);
+
+  // body neon
   ctx.fillStyle=body;
   ctx.beginPath(); ctx.arc(bird.x,bird.y,bird.r,0,Math.PI*2); ctx.fill();
 
   // wing
+  ctx.shadowBlur=0;
   ctx.fillStyle="rgba(255,255,255,.75)";
   ctx.beginPath();
-  ctx.ellipse(bird.x-6, bird.y+3, 9, 6, Math.sin(performance.now()/140)*0.35, 0, Math.PI*2);
+  ctx.ellipse(bird.x-6, bird.y+3, 9, 6, Math.sin(performance.now()/130)*0.35, 0, Math.PI*2);
   ctx.fill();
 
   // eye
-  ctx.fillStyle="#111";
+  ctx.fillStyle="#0b0b16";
   ctx.beginPath(); ctx.arc(bird.x+5,bird.y-3,2.4,0,Math.PI*2); ctx.fill();
 
   // beak
-  ctx.fillStyle="#ff9a2b";
+  ctx.fillStyle="#ff8a2b";
   ctx.beginPath();
   ctx.moveTo(bird.x+10, bird.y+1);
   ctx.lineTo(bird.x+18, bird.y+4);
   ctx.lineTo(bird.x+10, bird.y+7);
-  ctx.closePath(); ctx.fill();
-
-  ctx.globalAlpha=1;
+  ctx.closePath();
+  ctx.fill();
 
   // shield ring
   if(bird.shield>0){
-    ctx.strokeStyle="rgba(75,227,255,.85)";
+    neonGlow("#07f7ff", 18);
+    ctx.strokeStyle="rgba(75,227,255,.9)";
     ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(bird.x,bird.y,bird.r+6,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(bird.x,bird.y,bird.r+7,0,Math.PI*2); ctx.stroke();
   }
+
+  ctx.restore();
+  ctx.globalAlpha=1;
 }
 
 function drawHUD(){
-  ctx.font = "16px Arial";
+  ctx.save();
   ctx.fillStyle="rgba(0,0,0,.35)";
-  ctx.fillRect(10,10, 206, 78);
+  ctx.fillRect(12,12, 228, 92);
 
   ctx.fillStyle="#fff";
-  ctx.fillText("Score: " + G.score, 20, 33);
-  ctx.fillText("Moedas: " + G.coins, 20, 53);
-  ctx.fillText("Best: " + G.best, 20, 73);
+  ctx.font="16px Arial";
+  ctx.fillText("Score: " + G.score, 24, 38);
+  ctx.fillText("Moedas: " + G.coins, 24, 60);
+  ctx.fillText("Best: " + G.best, 24, 82);
 
-  // hp
+  // hearts
   for(let i=0;i<bird.hpMax;i++){
     const x = canvas.width - 22 - i*22;
-    const y = 24;
-    ctx.fillStyle = (i<bird.hp) ? "#ff4a68" : "rgba(255,255,255,.25)";
-    ctx.beginPath();
-    ctx.arc(x,y,8,0,Math.PI*2);
-    ctx.fill();
+    const y = 26;
+    ctx.fillStyle = (i<bird.hp) ? "#ff2bd6" : "rgba(255,255,255,.2)";
+    neonGlow("#ff2bd6", (i<bird.hp)?12:0);
+    ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2); ctx.fill();
+    ctx.shadowBlur=0;
   }
 
-  // mode
   if(bird.mode){
     ctx.fillStyle="rgba(0,0,0,.35)";
-    ctx.fillRect(10, 96, 206, 30);
+    ctx.fillRect(12, 114, 228, 32);
     ctx.fillStyle="#fff";
-    ctx.fillText("Modo: " + bird.mode + " ("+bird.modeTime.toFixed(0)+"s)", 20, 118);
+    ctx.font="14px Arial";
+    ctx.fillText("Modo: "+bird.mode+" ("+Math.ceil(bird.modeTime)+"s)", 24, 136);
   }
+
+  ctx.restore();
 }
 
 function drawChoiceOverlay(){
-  ctx.fillStyle="rgba(0,0,0,0.72)";
+  ctx.fillStyle="rgba(0,0,0,0.78)";
   ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  ctx.save();
+  neonGlow("#a55bff", 18);
+  ctx.fillStyle="rgba(165,91,255,.20)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.restore();
 
   ctx.fillStyle="#fff";
   ctx.font="22px Arial";
-  ctx.fillText("Escolha um upgrade", 30, canvas.height/2 - 215);
+  ctx.fillText("ESCOLHA UM UPGRADE", 26, canvas.height/2 - 230);
 
-  const startY = canvas.height/2 - 170;
-  const cardH = 96;
+  const startY = canvas.height/2 - 185;
+  const cardH = 102;
 
   for(let i=0;i<choiceCards.length;i++){
     const c = choiceCards[i];
     const y = startY + i*(cardH+22);
 
-    // card
-    ctx.fillStyle="rgba(255,255,255,0.10)";
-    ctx.fillRect(26, y, canvas.width-52, cardH);
-
-    // rarity color hint
     let col = "#bdbdbd";
-    if(c.rarity==="Raro") col="#5bd3ff";
-    if(c.rarity==="Épico") col="#ff7cff";
+    if(c.rarity==="Raro") col="#07f7ff";
+    if(c.rarity==="Épico") col="#ff2bd6";
+    if(c.rarity==="LENDÁRIO") col="#ff8a2b";
+
+    ctx.save();
+    neonGlow(col, 18);
+    ctx.fillStyle="rgba(255,255,255,.10)";
+    ctx.fillRect(22, y, canvas.width-44, cardH);
 
     ctx.fillStyle=col;
-    ctx.fillRect(26, y, 10, cardH);
+    ctx.fillRect(22, y, 10, cardH);
 
+    ctx.shadowBlur=0;
     ctx.fillStyle="#fff";
     ctx.font="18px Arial";
-    ctx.fillText(c.name + " ["+c.rarity+"]", 46, y+33);
+    ctx.fillText(c.name, 46, y+36);
 
     ctx.font="14px Arial";
     ctx.fillStyle="rgba(255,255,255,.85)";
-    ctx.fillText(c.desc, 46, y+60);
+    ctx.fillText(c.desc, 46, y+64);
+
+    ctx.restore();
   }
 
   ctx.fillStyle="rgba(255,255,255,.75)";
   ctx.font="14px Arial";
-  ctx.fillText("Clique/toque em uma carta para continuar", 30, canvas.height - 50);
+  ctx.fillText("Toque em uma carta para continuar", 26, canvas.height - 50);
 }
 
 function drawGameOver(){
-  ctx.fillStyle="rgba(0,0,0,0.70)";
+  ctx.fillStyle="rgba(0,0,0,0.72)";
   ctx.fillRect(0,0,canvas.width,canvas.height);
 
-  ctx.fillStyle="#ff4a68";
+  ctx.save();
+  neonGlow("#ff2bd6", 26);
+  ctx.fillStyle="rgba(255,43,214,.18)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.restore();
+
+  ctx.fillStyle="#ff2bd6";
   ctx.font="34px Arial";
-  ctx.fillText("GAME OVER", canvas.width/2 - 110, canvas.height/2 - 70);
+  ctx.fillText("GAME OVER", canvas.width/2 - 110, canvas.height/2 - 80);
 
   ctx.fillStyle="#fff";
   ctx.font="20px Arial";
-  ctx.fillText("Score: " + G.score, canvas.width/2 - 48, canvas.height/2 - 25);
-  ctx.fillText("Best: " + G.best, canvas.width/2 - 44, canvas.height/2 + 5);
+  ctx.fillText("Score: " + G.score, canvas.width/2 - 50, canvas.height/2 - 32);
+  ctx.fillText("Best: " + G.best, canvas.width/2 - 45, canvas.height/2 + 0);
 
   ctx.font="15px Arial";
   ctx.fillStyle="rgba(255,255,255,.85)";
-  ctx.fillText("Clique/toque para reiniciar", canvas.width/2 - 105, canvas.height/2 + 50);
+  ctx.fillText("Toque/clique para reiniciar", canvas.width/2 - 106, canvas.height/2 + 56);
 
   ctx.fillStyle="rgba(255,255,255,.55)";
-  ctx.fillText("Dica: moedas = recursos. Token roxo abre upgrades.", canvas.width/2 - 175, canvas.height/2 + 85);
+  ctx.fillText("🟠 Orbe laranja (1/100) concede poderes lendários.", canvas.width/2 - 170, canvas.height/2 + 90);
 }
 
 function draw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
-
   drawBackground();
   drawPipes();
   drawItems();
@@ -799,7 +1024,7 @@ function draw(){
   if(G.gameOver) drawGameOver();
 }
 
-/* ===================== MAIN LOOP ===================== */
+/* ===================== Main Loop ===================== */
 function loop(t){
   const dt = Math.min(0.033, (t-lastT)/1000);
   lastT = t;
@@ -809,11 +1034,6 @@ function loop(t){
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
-
-/* primeira interação ativa audio em alguns browsers */
-window.addEventListener("pointerdown", ()=>{
-  if(actx && actx.state==="suspended") actx.resume();
-},{once:false});
 </script>
 </body>
 </html>
